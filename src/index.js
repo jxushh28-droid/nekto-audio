@@ -129,7 +129,9 @@ client.on(Events.InteractionCreate, async interaction => {
       case 'leave': await leave(); message = 'Stopped Nekto and left voice.'; break;
       case 'status': {
         const status = await browser.status();
-        message = `Discord voice: ${session?.connection.state.status || 'disconnected'}\nNekto: ${status.active ? (status.tracks ? 'receiving audio' : 'open/searching') : 'stopped'}\nLive token authorization: ${status.authorization || 'unconfirmed'}\nToken: ${store.value ? 'saved' : 'not set'}\nAudio frames received: ${queue.received}\nAudio frames containing sound: ${queue.nonSilent}\nLast failure: ${status.lastFailure ? `${status.lastFailure.code}: ${status.lastFailure.message}` : 'none'}\n${status.error || ''}`;
+        const diagnostics = status.authorizationDiagnostics;
+        const registration = diagnostics ? `\nAudio registration: authenticated=${diagnostics.authenticated}; socket=${diagnostics.socketConnected}; identity=${diagnostics.identityPresent}\nAudio token checks: storage=${diagnostics.savedTokenMatches}; live=${diagnostics.liveTokenMatches}\nAudio restrictions: captcha=${diagnostics.captcha || diagnostics.hcaptcha}; restricted=${diagnostics.restricted}; registration error=${diagnostics.registrationError}` : '';
+        message = `Discord voice: ${session?.connection.state.status || 'disconnected'}\nNekto: ${status.active ? (status.tracks ? 'receiving audio' : 'open/searching') : 'stopped'}\nLive token authorization: ${status.authorization || 'unconfirmed'}\nToken: ${store.value ? 'saved' : 'not set'}\nAudio frames received: ${queue.received}\nAudio frames containing sound: ${queue.nonSilent}${registration}\nLast failure: ${status.lastFailure ? `${status.lastFailure.code}: ${status.lastFailure.message}` : 'none'}\n${status.error || ''}`;
         break;
       }
     }

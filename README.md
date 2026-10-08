@@ -1,8 +1,8 @@
 # Nekto audio → Discord
 
-An owner-controlled Discord bot that joins your voice channel, opens https://nekto-me.kz/audiochat#/ in headless Chromium, sets `storage_audio_v2.user.authToken` before the app loads, authorizes that token through the live Vuex client, starts a search, and plays incoming WebRTC audio through Discord.
+An owner-controlled Discord bot that joins your voice channel, opens https://nekto-me.kz/audiochat#/ in headless Chromium, sets `storage_audio_v2.user.authToken` before the app loads, confirms native audio registration through Vuex, starts a search, and plays incoming WebRTC audio through Discord.
 
-Once the audio client loads, the bot finds its Vue instance through `el.__vue__`, commits `user/setAuthToken` in its Vuex store, and calls the client's own `authorize()` method. Search waits for `user/socket_auth.successToken`, then checks that Vuex and `storage_audio_v2` still contain the supplied token. A redundant authorization can also retain an already authenticated, connected session with a matching server-issued token model. Verification, token replacement, missing client methods, or an authorization timeout stop the search and appear in `/status`. The text client's `storage_v2` key is not used.
+Once the audio client loads, the bot finds its Vuex store through `el.__vue__` and observes native audio registration. Search starts only when `system.isAuth`, `system.socketConnected`, `user.tokenId`, and the supplied token in both Vuex and `storage_audio_v2` agree. It does not expect the text client's `tokenModel` or `user/socket_auth.successToken` event, and it does not redundantly reauthorize an audio session. Verification, native restrictions, registration errors, token replacement, or a timeout stop the search. `/status` preserves boolean registration diagnostics after closing a failed browser. The text client's `storage_v2` key is not used.
 
 This is an **incoming-only** relay. Nekto receives a silent microphone; your Discord microphone is not forwarded. Audio is processed in memory, with no recordings. People in your Discord voice channel can hear the Nekto participant.
 

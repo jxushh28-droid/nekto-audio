@@ -1,109 +1,80 @@
-// These functions are serialized by Playwright and run inside the audio page.
-// Prefer the supplied chat-store lookup; the audio client may use another module.
+// Serialized by Playwright. Audio uses native registration and user.tokenId;
+// its startup is different from the text client's authorize/successToken flow.
 export function audioClientReady() {
-  const apps = Array.from(document.querySelectorAll('*')).map(el => el.__vue__);
-  return apps.some(app => app?.$store?.state?.user &&
-    typeof (app.$socketActions || app.$store.$socketActions)?.authorize === 'function' &&
-    typeof app.$store.commit === 'function' && typeof app.$store.subscribe === 'function' &&
-    (app.$store.state.system?.socketConnected !== false ||
-      app.$store.state.system?.captchaRequired || app.$store.state.system?.hcaptchaRequired));
-}
-
-export function authorizeAudioToken({ token, timeout = 15000, settle = 2000 }) {
-  const apps = Array.from(document.querySelectorAll('*')).map(el => el.__vue__);
-  const compatible = app => app?.$store?.state?.user &&
-    typeof (app.$socketActions || app.$store.$socketActions)?.authorize === 'function' &&
-    typeof app.$store.commit === 'function' && typeof app.$store.subscribe === 'function';
-  const app = apps.find(app => compatible(app) && app.$store.state.chat) || apps.find(compatible);
-  if (!app) return { ok: false, reason: 'client-not-ready' };
-  const store = app.$store;
-  const actions = app.$socketActions || store.$socketActions;
-  const verification = () => !!(store.state.system?.captchaRequired || store.state.system?.hcaptchaRequired);
-  if (verification()) return { ok: false, reason: 'verification-required' };
-  if (store._mutations && !store._mutations['user/setAuthToken']) {
-    return { ok: false, reason: 'client-incompatible' };
-  }
-  const confirmed = () => {
-    const state = store.state;
-    let persisted = false;
-    try { persisted = JSON.parse(localStorage.getItem('storage_audio_v2'))?.user?.authToken === token; } catch {}
-    return !verification() && state.system?.isAuth === true && state.system?.socketConnected === true &&
-      state.user.authToken === token && state.user.tokenModel?.tokenInfo?.authToken === token && persisted;
-  };
-  const previouslyConfirmed = confirmed();
-  return new Promise(resolve => {
-    let finished = false, unsubscribe = () => {}, timer, settledTimer;
-    const finish = result => {
-      if (finished) return;
-      finished = true; clearTimeout(timer); clearTimeout(settledTimer); unsubscribe(); resolve(result);
-    };
-    try {
-      unsubscribe = store.subscribe(mutation => {
-        if (verification()) return finish({ ok: false, reason: 'verification-required' });
-        if (mutation.type !== 'user/socket_auth.successToken') return;
-        // Let the client's persistence subscriber process the response first.
-        Promise.resolve().then(() => {
-          if (verification()) return finish({ ok: false, reason: 'verification-required' });
-          const state = store.state;
-          if (state.user.authToken !== token ||
-              (state.user.tokenModel?.tokenInfo?.authToken != null &&
-                state.user.tokenModel.tokenInfo.authToken !== token)) {
-            return finish({ ok: false, reason: 'token-replaced' });
-          }
-          let persisted = false;
-          try { persisted = JSON.parse(localStorage.getItem('storage_audio_v2'))?.user?.authToken === token; } catch {}
-          if (!persisted) return finish({ ok: false, reason: 'storage-mismatch' });
-          if (state.system?.isAuth === false || state.system?.socketConnected === false) {
-            return finish({ ok: false, reason: 'authorization-failed' });
-          }
-          finish({ ok: true, reason: 'accepted' });
-        });
-      });
-      timer = setTimeout(() => finish({ ok: false, reason: 'authorization-timeout' }), timeout);
-      // Like the text client, allow a redundant authorize to retain an already
-      // confirmed server-issued identity. A storage write alone cannot qualify.
-      if (previouslyConfirmed) settledTimer = setTimeout(() => {
-        if (confirmed()) finish({ ok: true, reason: 'existing-session-confirmed', responseReceived: false });
-      }, settle);
-      store.commit('user/setAuthToken', token);
-      if (finished) return;
-      if (store.state.user.authToken !== token) return finish({ ok: false, reason: 'client-incompatible' });
-      const pending = actions.authorize();
-      if (pending?.catch) pending.catch(() => finish({ ok: false, reason: 'authorization-failed' }));
-    } catch { finish({ ok: false, reason: 'authorization-failed' }); }
+  return Array.from(document.querySelectorAll('*')).some(el => {
+    const state = el.__vue__?.$store?.state;
+    return !!(state?.user && state.system && (state.system.isFirstLoaded ||
+      state.system.captchaRequired || state.system.hcaptchaRequired ||
+      state.system.forceDisconnectReason || state.system.errorRegistered ||
+      state.system.isAuth && state.system.socketConnected && state.user.tokenId != null));
   });
 }
 
-// Return only booleans; the full Vuex state contains credentials and user details.
-export function audioTokenMatches(token) {
-  const apps = Array.from(document.querySelectorAll('*')).map(el => el.__vue__);
-  const compatible = app => app?.$store?.state?.user &&
-    typeof (app.$socketActions || app.$store.$socketActions)?.authorize === 'function' &&
-    typeof app.$store.commit === 'function' && typeof app.$store.subscribe === 'function';
-  const app = apps.find(app => compatible(app) && app.$store.state.chat) || apps.find(compatible);
-  const state = app?.$store.state;
-  if (!state) return { ok: false, reason: 'client-not-ready' };
-  if (state.system?.captchaRequired || state.system?.hcaptchaRequired) return { ok: false, reason: 'verification-required' };
-  if (state.user.authToken !== token || (state.user.tokenModel?.tokenInfo?.authToken != null &&
-      state.user.tokenModel.tokenInfo.authToken !== token)) return { ok: false, reason: 'token-replaced' };
-  try {
-    if (JSON.parse(localStorage.getItem('storage_audio_v2'))?.user?.authToken !== token) {
-      return { ok: false, reason: 'storage-mismatch' };
+export function confirmAudioToken({ token, timeout = 15000, pollInterval = 100 }) {
+  const store = Array.from(document.querySelectorAll('*')).map(el => el.__vue__?.$store)
+    .find(store => store?.state?.user && store.state.system);
+  if (!store) return { ok: false, reason: 'client-not-ready' };
+  // Never return the full state: it contains tokens and personal details.
+  const snapshot = () => {
+    let saved = false;
+    try { saved = JSON.parse(localStorage.getItem('storage_audio_v2'))?.user?.authToken === token; } catch {}
+    const { user = {}, system = {} } = store.state;
+    const error = Number(system.errorRegistered);
+    return {
+      savedTokenMatches: saved, liveTokenMatches: user.authToken === token,
+      identityPresent: user.tokenId != null, authenticated: system.isAuth === true,
+      socketConnected: system.socketConnected === true,
+      captcha: !!system.captchaRequired, hcaptcha: !!system.hcaptchaRequired,
+      restricted: !!system.forceDisconnectReason,
+      registrationError: Number.isSafeInteger(error) ? error : 0,
+    };
+  };
+  const outcome = () => {
+    const diagnostics = snapshot();
+    const d = diagnostics;
+    let reason, ok = false;
+    if (d.captcha || d.hcaptcha) reason = 'verification-required';
+    else if (d.restricted) reason = 'native-restriction';
+    else if (d.registrationError) reason = 'native-registration-error';
+    else if (d.savedTokenMatches && d.liveTokenMatches && d.identityPresent && d.authenticated && d.socketConnected) {
+      ok = true; reason = 'native-session-confirmed';
+    } else if (d.authenticated && d.identityPresent && (!d.liveTokenMatches || !d.savedTokenMatches)) {
+      reason = 'token-not-accepted';
     }
-  } catch { return { ok: false, reason: 'storage-mismatch' }; }
-  if (state.system?.isAuth === false || state.system?.socketConnected === false) return { ok: false, reason: 'authorization-failed' };
-  return { ok: true, reason: 'accepted' };
+    return reason ? { ok, reason, diagnostics } : null;
+  };
+  const initial = outcome();
+  if (initial) return initial;
+  return new Promise(resolve => {
+    let done = false, unsubscribe = () => {}, timer, poll;
+    const finish = result => {
+      if (done) return;
+      done = true; clearTimeout(timer); clearInterval(poll); unsubscribe(); resolve(result);
+    };
+    const check = () => {
+      if (done) return;
+      const result = outcome();
+      if (result) finish(result);
+    };
+    try {
+      if (typeof store.subscribe === 'function') unsubscribe = store.subscribe(() => Promise.resolve().then(check));
+      timer = setTimeout(() => finish({ ok: false, reason: 'authorization-timeout', diagnostics: snapshot() }), timeout);
+      // Observe state as well as mutations: no text-only event is required.
+      poll = setInterval(check, pollInterval);
+      check();
+    } catch { finish({ ok: false, reason: 'authorization-failed', diagnostics: snapshot() }); }
+  });
 }
 
 const failures = {
-  'client-not-ready': ['NEKTO_VUEX_NOT_READY', 'Nekto live Vuex client did not become ready.'],
-  'client-incompatible': ['NEKTO_VUEX_INCOMPATIBLE', 'Nekto audio client does not support the expected token mutation.'],
+  'client-not-ready': ['NEKTO_VUEX_NOT_READY', 'Nekto audio Vuex client did not become ready.'],
   'verification-required': ['NEKTO_VERIFICATION', 'Nekto requires verification. Automatic search stopped.'],
-  'token-replaced': ['NEKTO_TOKEN_REPLACED', 'Nekto replaced the supplied token during authorization. Set a valid audio-session token with /token.'],
-  'storage-mismatch': ['NEKTO_TOKEN_STORAGE', 'Nekto live token and saved audio token do not match.'],
-  'authorization-timeout': ['NEKTO_AUTH_TIMEOUT', 'Nekto did not confirm live token authorization. Check your audio-session token and try again.'],
+  'native-restriction': ['NEKTO_RESTRICTED', 'Nekto restricted this audio session. Automatic search stopped.'],
+  'native-registration-error': ['NEKTO_REGISTRATION', 'Nekto reported an audio registration error. See /status for its numeric code.'],
+  'token-not-accepted': ['NEKTO_TOKEN_REPLACED', 'Nekto did not retain the supplied audio token. Set a valid audio-session token with /token.'],
+  'authorization-timeout': ['NEKTO_AUTH_TIMEOUT', 'Nekto audio registration did not complete. See /status for connection and token checks.'],
 };
 export function authorizationError(reason) {
-  const [code, message] = failures[reason] || ['NEKTO_AUTH_FAILED', 'Nekto live token authorization failed.'];
+  const [code, message] = failures[reason] || ['NEKTO_AUTH_FAILED', 'Nekto audio token authorization failed.'];
   return Object.assign(new Error(message), { code });
 }
