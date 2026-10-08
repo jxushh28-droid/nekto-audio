@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { readAudioPrompt, respondToAudioPrompt, promptMessage } from '../src/audio-prompt.js';
+import { readAudioPrompt } from '../src/audio-prompt.js';
 
 function read({ text = 'Укажите ваш возраст.', field = 'number', system = {}, captcha = false, ban = false } = {}) {
   const shown = extra => ({ isConnected: true, checkVisibility: () => true, ...extra });
@@ -17,51 +17,19 @@ function read({ text = 'Укажите ваш возраст.', field = 'number'
   });
 }
 
-function page(prompt) {
-  const actions = [];
-  const locator = { filter() { return this; }, locator() { return this; },
-    fill: async value => actions.push(['fill', value]), selectOption: async value => actions.push(['select', value.label]),
-    click: async () => actions.push(['click']) };
-  return { actions, evaluate: async () => prompt, locator: () => locator };
-}
-
-test('modal inspection identifies the actual question, input and displayed options', () => {
-  const age = read(); assert.equal(age.category, 'age'); assert.equal(age.inputType, 'number');
-  assert.equal(age.text, 'Укажите ваш возраст.'); assert.equal(age.fieldCount, 1);
-  const gender = read({ text: 'Choose your gender', field: 'select' });
-  assert.equal(gender.category, 'gender'); assert.deepEqual(Array.from(gender.options), ['Male', 'Female']);
+test('the reported Russian permission-denied popup is classified as a microphone error', () => {
+  const prompt = read({ text: '!Доступ к микрофону запрещен Пожалуйста разрешите доступ к микрофону.', field: null });
+  assert.equal(prompt.category, 'microphone-denied'); assert.equal(prompt.visible, true);
 });
 
-test('age is never fabricated or automatically confirmed', async () => {
-  const p = page(read());
-  assert.equal((await respondToAudioPrompt(p, { automatic: true })).handled, false);
-  assert.equal((await respondToAudioPrompt(p)).handled, false); assert.equal(p.actions.length, 0);
-  assert.equal((await respondToAudioPrompt(p, { value: '35' })).handled, true);
-  assert.deepEqual(p.actions, [['fill', '35'], ['click']]);
-});
-
-test('explicit select answers use native options and routine confirmations can proceed', async () => {
-  const gender = page(read({ text: 'Choose your gender', field: 'select' }));
-  assert.equal((await respondToAudioPrompt(gender, { value: 'Female' })).handled, true);
-  assert.deepEqual(gender.actions, [['select', 'Female'], ['click']]);
-  const ordinary = page(read({ text: 'Начать разговор?', field: null }));
-  assert.equal((await respondToAudioPrompt(ordinary, { automatic: true })).handled, true);
-  assert.deepEqual(ordinary.actions, [['click']]);
-});
-
-test('verification, restrictions, missing microphone and unknown prompts are not clicked', async () => {
-  for (const options of [{ text: 'Allow microphone; verify you are human', field: null },
-    { text: 'Начать разговор?', field: null, system: { captchaRequired: true } },
-    { text: 'Начать разговор?', field: null, captcha: true },
-    { text: 'Начать разговор?', field: null, ban: true },
-    { text: 'Микрофон не обнаружен', field: null }, { text: 'An unknown setting', field: 'text' }]) {
-    const p = page(read(options));
-    assert.equal((await respondToAudioPrompt(p, { automatic: true })).handled, false);
-    assert.equal((await respondToAudioPrompt(p, { value: 'value' })).handled, false);
-    assert.equal(p.actions.length, 0);
+test('verification and restriction flags take precedence over microphone wording', () => {
+  for (const options of [{ system: { captchaRequired: true } }, { captcha: true }]) {
+    assert.equal(read({ text: 'Allow microphone', ...options }).category, 'verification');
   }
+  assert.equal(read({ text: 'Allow microphone', ban: true }).category, 'restriction');
 });
 
-test('prompt summaries redact the configured token', () => {
-  assert(!promptMessage({ category: 'unknown', text: 'token private-test-token' }, 'private-test-token').includes('private-test-token'));
+test('unrelated popup text is preserved for private diagnostics', () => {
+  const prompt = read({ text: 'Укажите ваш возраст.' });
+  assert.equal(prompt.category, 'age'); assert.equal(prompt.text, 'Укажите ваш возраст.');
 });

@@ -19,6 +19,7 @@ export function readAudioPrompt() {
   const restricted = !!system?.forceDisconnectReason || popup.classList.contains('banPopup') ||
     /заблокирован|забанен|banned|blocked|ограничен доступ/i.test(text);
   const category = verification ? 'verification' : restricted ? 'restriction' :
+    /доступ.*микрофон.*(?:запрещ|отказ)|microphone.*(?:denied|not allowed)|microphone permission.*denied/i.test(text) ? 'microphone-denied' :
     /микрофон.*(не найден|не обнаруж|недоступ|отсутств)|microphone.*(not found|unavailable|missing)|no microphone/i.test(text) ? 'microphone-error' :
     /возраст|\bage\b/i.test(text) ? 'age' : /ваш пол|выберите пол|\bgender\b/i.test(text) ? 'gender' :
     /разреш(ите|ить).*микрофон|доступ.*микрофон|allow.*microphone|enable.*microphone/i.test(text) ? 'microphone-confirm' :
@@ -31,34 +32,3 @@ export function readAudioPrompt() {
     confirmEnabled: visible(confirm) && !confirm.disabled };
 }
 
-export async function respondToAudioPrompt(page, { value, automatic = false } = {}) {
-  const prompt = await page.evaluate(readAudioPrompt);
-  if (!prompt.visible) throw new Error('Nekto has no visible website prompt.');
-  if (['verification', 'restriction', 'microphone-error'].includes(prompt.category)) {
-    return { handled: false, prompt };
-  }
-  // Automatic clicks are limited to routine call/microphone confirmations.
-  if (automatic && (!['microphone-confirm', 'call-confirm'].includes(prompt.category) || prompt.fieldCount)) {
-    return { handled: false, prompt };
-  }
-  if (!automatic && !['age', 'gender', 'microphone-confirm', 'call-confirm'].includes(prompt.category)) {
-    return { handled: false, prompt };
-  }
-  if (!prompt.confirmEnabled) return { handled: false, prompt };
-  if (prompt.fieldCount) {
-    if (prompt.fieldCount !== 1 || value == null || !value.trim()) return { handled: false, prompt };
-    const field = page.locator('.swal2-popup').filter({ visible: true })
-      .locator('input:not([type="hidden"]), select, textarea').filter({ visible: true });
-    if (prompt.inputType === 'select') await field.selectOption({ label: value.trim() });
-    else if (['text', 'number', 'textarea'].includes(prompt.inputType)) await field.fill(value.trim());
-    else return { handled: false, prompt };
-  }
-  await page.locator('.swal2-popup').filter({ visible: true }).locator('.swal2-confirm').click({ timeout: 3000 });
-  return { handled: true, prompt };
-}
-
-export function promptMessage(prompt, token = '') {
-  const text = token ? prompt.text?.split(token).join('[token]') : prompt.text;
-  const options = prompt.options?.length ? ` Options: ${prompt.options.join(', ')}.` : '';
-  return `Nekto prompt (${prompt.category || 'unknown'}): ${text || 'No readable prompt text.'}${options}`;
-}

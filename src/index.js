@@ -31,9 +31,6 @@ const commands = [
   new SlashCommandBuilder().setName('stop').setDescription('Stop Nekto while staying in Discord voice'),
   new SlashCommandBuilder().setName('leave').setDescription('Stop Nekto and leave Discord voice'),
   new SlashCommandBuilder().setName('status').setDescription('Show private relay connection status'),
-  new SlashCommandBuilder().setName('prompt').setDescription('Privately show the current Nekto website prompt'),
-  new SlashCommandBuilder().setName('answer').setDescription('Answer a normal Nekto call setting or confirmation')
-    .addStringOption(option => option.setName('value').setDescription('Your response, such as your age or a displayed option').setMaxLength(100)),
 ].map(command => command.setDMPermission(false).toJSON());
 
 async function leave() {
@@ -131,13 +128,6 @@ client.on(Events.InteractionCreate, async interaction => {
       }
       case 'stop': await browser.stop(); queue.clear(); message = 'Nekto stopped.'; break;
       case 'leave': await leave(); message = 'Stopped Nekto and left voice.'; break;
-      case 'prompt': privateStatus = await browser.promptDetails(store.value); break;
-      case 'answer': {
-        if (!session || session.guildId !== interaction.guildId) throw new Error('Use /join first.');
-        const member = await interaction.guild.members.fetch(interaction.user.id);
-        if (member.voice.channelId !== session.channelId) throw new Error('Join my voice channel first.');
-        message = await browser.answerPrompt(store.value, interaction.options.getString('value')); break;
-      }
       case 'status': {
         const status = await browser.status();
         privateStatus = statusReply({ status, voice: session?.connection.state.status || 'disconnected', token: store.value, queue });
@@ -195,6 +185,13 @@ try {
       if (!ownerIds.size || [...ownerIds].some(id => !/^\d{17,20}$/.test(id))) throw new Error('Invalid bot owner configuration.');
       const manager = process.env.DISCORD_GUILD_ID
         ? (await client.guilds.fetch(process.env.DISCORD_GUILD_ID)).commands : client.application.commands;
+      // Delete the retired popup commands without replacing unrelated commands.
+      for (const existingManager of [client.application.commands, manager].filter((value, index, list) => list.indexOf(value) === index)) {
+        const registered = await existingManager.fetch();
+        for (const command of registered.values()) {
+          if (['answer', 'prompt'].includes(command.name)) await existingManager.delete(command.id);
+        }
+      }
       for (const command of commands) await manager.create(command);
       ready = true;
       console.log('Discord bot online; slash commands registered; browser ready.');

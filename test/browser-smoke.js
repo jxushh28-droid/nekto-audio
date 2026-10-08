@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { chromium } from 'playwright';
-import { installBrowserRelay } from '../src/browser-init.js';
+import { installBrowserRelay, inspectBrowserMicrophone } from '../src/browser-init.js';
 import { FRAME_BYTES } from '../src/pcm.js';
 import { audioClientReady, confirmAudioToken } from '../src/live-session.js';
-import { readAudioPrompt, respondToAudioPrompt } from '../src/audio-prompt.js';
-import { waitForAudioSearch } from '../src/call-state.js';
+import { readAudioPrompt } from '../src/audio-prompt.js';
 
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
@@ -16,14 +15,35 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 let browser;
 try {
-  browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH, ignoreDefaultArgs: ['--mute-audio'], args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream'] });
-  const page = await browser.newPage({ permissions: ['microphone'] });
+  browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH, ignoreDefaultArgs: ['--mute-audio'], args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
+  const context = await browser.newContext();
+  await context.grantPermissions(['microphone'], { origin });
+  const page = await context.newPage();
   const frames = [];
   await page.exposeBinding('pushNektoAudio', (_, base64) => frames.push(Buffer.from(base64, 'base64')));
   await page.addInitScript(installBrowserRelay, { token: 'local-test-token', origin });
   await page.goto(origin);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken), 'local-test-token');
-  assert(await page.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).some(device => device.kind === 'audioinput')), 'No microphone device is enumerated');
+  const microphone = await page.evaluate(inspectBrowserMicrophone);
+  assert.equal(microphone.permission, 'granted');
+  assert(microphone.inputs > 0); assert.equal(microphone.legacyApi, true);
+  const microphonePaths = await page.evaluate(async () => {
+    let expectedLabel;
+    const check = stream => {
+      const track = stream.getAudioTracks()[0];
+      expectedLabel ??= track?.label;
+      const result = stream.getAudioTracks().length === 1 && track.readyState === 'live' && track.label === expectedLabel;
+      stream.getTracks().forEach(track => track.stop()); return result;
+    };
+    const results = { modern: check(await navigator.mediaDevices.getUserMedia({ audio: true, video: false })) };
+    for (const name of ['getUserMedia', 'webkitGetUserMedia', 'mozGetUserMedia']) {
+      if (typeof navigator[name] !== 'function') continue;
+      results[name] = await new Promise((resolve, reject) => navigator[name]({ audio: true, video: false }, stream => resolve(check(stream)), reject));
+    }
+    return results;
+  });
+  assert(Object.values(microphonePaths).every(Boolean));
+  assert.equal(microphonePaths.getUserMedia, true);
   // A minimal Vuex client fixture checks the serialized functions in real Chromium.
   await page.evaluate(() => {
     const subscribers = new Set();
@@ -128,22 +148,12 @@ try {
   await page.evaluate(closeLoopback);
   await page.waitForFunction(() => window.__nektoRelay.tracks === 0);
   await page.evaluate(() => {
-    const modal = document.createElement('div');
-    modal.className = 'swal2-popup';
-    modal.innerHTML = '<h2 class="swal2-title">Укажите ваш возраст.</h2><input type="number"><button class="swal2-confirm">Продолжить</button>';
+    const modal = document.createElement('div'); modal.className = 'swal2-popup';
+    modal.innerHTML = '<h2 class="swal2-title">Доступ к микрофону запрещен</h2><div class="swal2-html-container">Пожалуйста разрешите доступ к микрофону.</div>';
     document.body.append(modal);
-    modal.querySelector('button').onclick = () => {
-      window.testPromptAnswer = modal.querySelector('input').value;
-      document.body.__vue__.$store.state.user.isSearching = true;
-      modal.remove();
-    };
   });
-  assert.equal((await page.evaluate(readAudioPrompt)).category, 'age');
-  assert.equal((await respondToAudioPrompt(page, { automatic: true })).handled, false);
-  assert.equal((await respondToAudioPrompt(page, { value: '35' })).handled, true);
-  assert.equal(await page.evaluate(() => window.testPromptAnswer), '35');
-  assert.equal((await waitForAudioSearch(page)).searching, true);
-  console.log('Browser integration passed: WebRTC PCM; missed track recovery; enumerated microphone; native registration; explicit modal answer and search; cleanup.');
+  assert.equal((await page.evaluate(readAudioPrompt)).category, 'microphone-denied');
+  console.log('Browser integration passed: granted microphone permission; modern and legacy capture; WebRTC PCM; missed track recovery; cleanup.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
