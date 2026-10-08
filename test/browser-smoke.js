@@ -26,23 +26,45 @@ try {
     const audio = new AudioContext({ sampleRate: 48000 });
     const source = audio.createOscillator(); source.frequency.value = 440;
     const output = audio.createMediaStreamDestination(); source.connect(output); source.start(); await audio.resume();
+    window.testAudio = audio; window.testTone = source;
     const sender = new RTCPeerConnection({ iceServers: [] });
     const receiver = new RTCPeerConnection({ iceServers: [] });
     window.testPeers = [sender, receiver];
     sender.addTrack(output.stream.getAudioTracks()[0], output.stream);
-    sender.onicecandidate = e => { if (e.candidate) receiver.addIceCandidate(e.candidate).catch(() => {}); };
-    receiver.onicecandidate = e => { if (e.candidate) sender.addIceCandidate(e.candidate).catch(() => {}); };
+    const toReceiver = []; const toSender = [];
+    sender.onicecandidate = e => {
+      if (!e.candidate) return;
+      if (receiver.remoteDescription) receiver.addIceCandidate(e.candidate).catch(() => {});
+      else toReceiver.push(e.candidate);
+    };
+    receiver.onicecandidate = e => {
+      if (!e.candidate) return;
+      if (sender.remoteDescription) sender.addIceCandidate(e.candidate).catch(() => {});
+      else toSender.push(e.candidate);
+    };
     await sender.setLocalDescription(await sender.createOffer());
     await receiver.setRemoteDescription(sender.localDescription);
+    for (const candidate of toReceiver) await receiver.addIceCandidate(candidate);
     await receiver.setLocalDescription(await receiver.createAnswer());
     await sender.setRemoteDescription(receiver.localDescription);
+    for (const candidate of toSender) await sender.addIceCandidate(candidate);
   });
+  await page.waitForFunction(() => window.testPeers.every(peer => peer.connectionState === 'connected'), null, { timeout: 10000 });
   const deadline = Date.now() + 10000;
   while (!frames.some(frame => frame.some(byte => byte !== 0)) && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   assert(frames.length > 0, 'No WebRTC PCM reached Node');
   assert(frames.every(frame => frame.length === FRAME_BYTES), 'Incorrect frame format');
+  if (!frames.some(frame => frame.some(byte => byte !== 0))) {
+    console.log('Audio test diagnostics:', await page.evaluate(async () => ({
+      relay: window.__nektoRelay, audioState: window.testAudio.state, audioTime: window.testAudio.currentTime,
+      peers: await Promise.all(window.testPeers.map(async peer => ({
+        connection: peer.connectionState,
+        stats: [...(await peer.getStats()).values()].filter(s => ['inbound-rtp', 'outbound-rtp', 'media-source'].includes(s.type)),
+      }))),
+    })));
+  }
   assert(frames.some(frame => frame.some(byte => byte !== 0)), 'Remote audio is silent');
   await page.evaluate(() => window.testPeers.forEach(peer => peer.close()));
   await page.waitForFunction(() => window.__nektoRelay.tracks === 0);
