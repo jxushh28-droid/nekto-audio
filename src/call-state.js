@@ -14,7 +14,7 @@ export function readAudioCallState() {
       !['hidden', 'collapse'].includes(style.visibility));
   };
   const verification = !!(state?.system.captchaRequired || state?.system.hcaptchaRequired);
-  const restricted = !!state?.system.forceDisconnectReason || visible('#mask_bad') || visible('#mask_bad_inet');
+  const restricted = !!state?.system.forceDisconnectReason || visible('#mask_bad') || visible('#mask_bad_inet') || visible('.swal2-popup.banPopup');
   const attention = visible('.swal2-popup');
   const searching = !!state?.user.isSearching || /#\/searching(?:[/?]|$)/.test(location.hash) ||
     visible('.chat-step.scan .search_loader');

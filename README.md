@@ -15,6 +15,8 @@ This is an **incoming-only** relay. Nekto receives a silent microphone; your Dis
 | `/next` | End the Nekto call and start a fresh search. |
 | `/stop` | Close Nekto while remaining in Discord voice. |
 | `/leave` | Close Nekto and leave Discord voice. |
+| `/prompt` | Privately show the current website popup and its screenshot. |
+| `/answer value:<response>` | Answer a normal call setting, such as age or a displayed gender option, then continue search. Omit value for a normal confirmation. |
 | `/status` | Show your full saved Nekto token, partner/search state, WebRTC diagnostics, and the last failure privately. |
 
 Use `/token`, join a voice channel yourself, then use `/join`. Changing the token restarts search when you are in the bot's voice channel. Replies are ephemeral. `/status` shows the complete saved Nekto token only to the authorized requester; long tokens are attached in `nekto-token.txt` to fit Discord message limits. The bot never logs token values. Only the Discord application owner can control it unless `BOT_OWNER_IDS` is configured. The bot disconnects when the controlling user leaves or moves out of its voice channel.
@@ -31,7 +33,7 @@ Deploy this repository using its Dockerfile. Run one replica with app sleeping d
 
 Required environment variable: `DISCORD_TOKEN`. Optional variables: `BOT_OWNER_IDS` (comma-separated Discord user IDs), `DISCORD_GUILD_ID`, `NEKTO_AUTH_TOKEN` (initial fallback token), `DATA_DIR` (default `/data` in Docker), `PORT` (default 3000). The health endpoint `/health` becomes ready only after Discord login, slash-command registration and browser startup succeed. No public domain is needed for this worker.
 
-Nekto uses its native `#searchCompanyBtn` control and confirms search from `user.isSearching` or native partner state. Status distinguishes waiting for a partner, an established partner, and WebRTC/audio capture problems. Nekto uses its normal website controls. If the site requests verification, rejects the token or changes its interface, the command reports failure; it does not bypass safeguards. `/next` opens a new browser context to end the previous peer connection cleanly. Relay success depends on the site accepting the token, finding a participant and Railway reaching the WebRTC/Discord voice endpoints.
+Chromium exposes a synthetic microphone device while Nekto receives the silent relay track. Ordinary website prompts remain open instead of being discarded: `/prompt` shows their actual text and screenshot; `/answer` submits the owner's supplied age or displayed gender option. Routine call/microphone confirmations can proceed automatically. Verification and restriction prompts are not answered. Nekto uses its native `#searchCompanyBtn` control and confirms search from `user.isSearching` or native partner state. Status distinguishes waiting for a partner, an established partner, and WebRTC/audio capture problems. Nekto uses its normal website controls. If the site requests verification, rejects the token or changes its interface, the command reports failure; it does not bypass safeguards. `/next` opens a new browser context to end the previous peer connection cleanly. Relay success depends on the site accepting the token, finding a participant and Railway reaching the WebRTC/Discord voice endpoints.
 
 ## Local development
 

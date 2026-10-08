@@ -20,3 +20,9 @@ test('long tokens are preserved in an attachment within Discord message limits',
   assert.equal(reply.files[0].attachment.toString('utf8'), token);
   assert.equal(reply.files[0].name, 'nekto-token.txt');
 });
+
+test('a pending prompt exposes its text privately without closing the browser', () => {
+  const reply = statusReply({ ...args, token: 'saved-token', status: { ...args.status,
+    callState: { phase: 'awaiting a website prompt' }, promptInfo: { visible: true, category: 'age', text: 'Укажите ваш возраст.' } } });
+  assert(reply.content.includes('Укажите ваш возраст.')); assert(reply.content.includes('/answer value:<response>'));
+});

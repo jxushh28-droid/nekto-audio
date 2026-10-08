@@ -4,6 +4,8 @@ import { chromium } from 'playwright';
 import { installBrowserRelay } from '../src/browser-init.js';
 import { FRAME_BYTES } from '../src/pcm.js';
 import { audioClientReady, confirmAudioToken } from '../src/live-session.js';
+import { readAudioPrompt, respondToAudioPrompt } from '../src/audio-prompt.js';
+import { waitForAudioSearch } from '../src/call-state.js';
 
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
@@ -14,13 +16,14 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 let browser;
 try {
-  browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH, ignoreDefaultArgs: ['--mute-audio'], args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
-  const page = await browser.newPage();
+  browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH, ignoreDefaultArgs: ['--mute-audio'], args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream'] });
+  const page = await browser.newPage({ permissions: ['microphone'] });
   const frames = [];
   await page.exposeBinding('pushNektoAudio', (_, base64) => frames.push(Buffer.from(base64, 'base64')));
   await page.addInitScript(installBrowserRelay, { token: 'local-test-token', origin });
   await page.goto(origin);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken), 'local-test-token');
+  assert(await page.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).some(device => device.kind === 'audioinput')), 'No microphone device is enumerated');
   // A minimal Vuex client fixture checks the serialized functions in real Chromium.
   await page.evaluate(() => {
     const subscribers = new Set();
@@ -124,7 +127,23 @@ try {
   assert.equal(await page.evaluate(() => window.__nektoRelay.trackEvents), diagnostics.trackEvents);
   await page.evaluate(closeLoopback);
   await page.waitForFunction(() => window.__nektoRelay.tracks === 0);
-  console.log('Browser integration passed: WebRTC -> 48 kHz stereo PCM; missed track event recovery; peer diagnostics; native audio registration; cleanup.');
+  await page.evaluate(() => {
+    const modal = document.createElement('div');
+    modal.className = 'swal2-popup';
+    modal.innerHTML = '<h2 class="swal2-title">Укажите ваш возраст.</h2><input type="number"><button class="swal2-confirm">Продолжить</button>';
+    document.body.append(modal);
+    modal.querySelector('button').onclick = () => {
+      window.testPromptAnswer = modal.querySelector('input').value;
+      document.body.__vue__.$store.state.user.isSearching = true;
+      modal.remove();
+    };
+  });
+  assert.equal((await page.evaluate(readAudioPrompt)).category, 'age');
+  assert.equal((await respondToAudioPrompt(page, { automatic: true })).handled, false);
+  assert.equal((await respondToAudioPrompt(page, { value: '35' })).handled, true);
+  assert.equal(await page.evaluate(() => window.testPromptAnswer), '35');
+  assert.equal((await waitForAudioSearch(page)).searching, true);
+  console.log('Browser integration passed: WebRTC PCM; missed track recovery; enumerated microphone; native registration; explicit modal answer and search; cleanup.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
