@@ -1,6 +1,7 @@
 import { chromium } from 'playwright';
 import { installBrowserRelay } from './browser-init.js';
 import { searchError } from './search-error.js';
+import { audioClientReady, authorizeAudioToken, audioTokenMatches, authorizationError } from './live-session.js';
 
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 const START = /^(Начать разговор|Начать поиск|Start conversation|Start search|Әңгімелесуді бастау)$/i;
@@ -45,6 +46,14 @@ export class NektoBrowser {
       stage = 'load';
       const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
       if (response && response.status() >= 400) throw searchError('load');
+      stage = 'authorize';
+      try { await page.waitForFunction(audioClientReady, null, { timeout: 20000 }); }
+      catch { throw authorizationError('client-not-ready'); }
+      check();
+      const authorization = await page.evaluate(authorizeAudioToken, { token });
+      if (!authorization.ok) throw authorizationError(authorization.reason);
+      check();
+      await page.evaluate(reason => { window.__nektoRelay.authorization = reason; }, authorization.reason);
       stage = 'control';
       const button = page.getByRole('button', { name: START }).first();
       await button.waitFor({ state: 'visible', timeout: 30000 });
@@ -52,6 +61,8 @@ export class NektoBrowser {
       if (blocked) throw new Error('Nekto is asking for browser verification. Automatic search stopped.');
       const captureError = await page.evaluate(() => window.__nektoRelay?.error);
       if (captureError) throw new Error(captureError);
+      const identity = await page.evaluate(audioTokenMatches, token);
+      if (!identity.ok) throw authorizationError(identity.reason);
       check();
       stage = 'click';
       await button.click();
@@ -62,6 +73,8 @@ export class NektoBrowser {
         return window.__nektoRelay?.tracks > 0 || !start || start.disabled || start.offsetParent === null;
       }, null, { timeout: 15000 });
       check();
+      const confirmedIdentity = await page.evaluate(audioTokenMatches, token);
+      if (!confirmedIdentity.ok) throw authorizationError(confirmedIdentity.reason);
       return 'Searching on Nekto. Incoming audio will play here when someone connects.';
     } catch (error) {
       const cancelled = generation !== this.generation;
@@ -70,7 +83,8 @@ export class NektoBrowser {
       if (cancelled) throw new Error('Nekto search was stopped.');
       const known = ['Nekto is asking for browser verification. Automatic search stopped.',
         'Audio capture initialization failed.', 'Remote audio capture failed.'];
-      const failure = known.includes(error.message) ? error : searchError(stage);
+      const failure = known.includes(error.message) || /^NEKTO_(VUEX_|AUTH_|TOKEN_|VERIFICATION$)/.test(error.code || '')
+        ? error : searchError(stage);
       this.lastFailure = { code: failure.code || 'NEKTO_CAPTURE_OR_VERIFICATION', message: failure.message };
       throw failure;
     }
@@ -93,3 +107,4 @@ export class NektoBrowser {
     this.browser = null;
   }
 }
+

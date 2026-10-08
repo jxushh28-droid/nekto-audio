@@ -1,6 +1,8 @@
 # Nekto audio → Discord
 
-An owner-controlled Discord bot that joins your voice channel, opens https://nekto-me.kz/audiochat#/ in headless Chromium, sets `storage_audio_v2.user.authToken` before the app loads, starts a search, and plays incoming WebRTC audio through Discord.
+An owner-controlled Discord bot that joins your voice channel, opens https://nekto-me.kz/audiochat#/ in headless Chromium, sets `storage_audio_v2.user.authToken` before the app loads, authorizes that token through the live Vuex client, starts a search, and plays incoming WebRTC audio through Discord.
+
+Once the audio client loads, the bot finds its Vue instance through `el.__vue__`, commits `user/setAuthToken` in its Vuex store, and calls the client's own `authorize()` method. Search waits for `user/socket_auth.successToken`, then checks that Vuex and `storage_audio_v2` still contain the supplied token. A redundant authorization can also retain an already authenticated, connected session with a matching server-issued token model. Verification, token replacement, missing client methods, or an authorization timeout stop the search and appear in `/status`. The text client's `storage_v2` key is not used.
 
 This is an **incoming-only** relay. Nekto receives a silent microphone; your Discord microphone is not forwarded. Audio is processed in memory, with no recordings. People in your Discord voice channel can hear the Nekto participant.
 
@@ -36,3 +38,4 @@ Nekto uses its normal website controls. If the site requests verification, rejec
 Requires Node 24.17+. Set environment variables in your shell, or run with Node's `--env-file=.env` option after copying `.env.example`. Install with `npm ci`, then `npx playwright install --with-deps chromium`. Run `npm start`.
 
 `npm test` checks token persistence, private file permissions, safe storage injection and bounded PCM buffering. `npm run test:browser` runs a local Chromium WebRTC loopback test to verify that real incoming audio reaches Node as 20 ms, 48 kHz stereo signed 16-bit little-endian PCM, and checks peer cleanup. Both tests run in the Docker build. A live Nekto-to-Discord call requires the owner to set a valid Nekto token and invoke `/join` from Discord.
+

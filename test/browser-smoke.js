@@ -3,6 +3,7 @@ import http from 'node:http';
 import { chromium } from 'playwright';
 import { installBrowserRelay } from '../src/browser-init.js';
 import { FRAME_BYTES } from '../src/pcm.js';
+import { audioClientReady, authorizeAudioToken, audioTokenMatches } from '../src/live-session.js';
 
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
@@ -20,6 +21,28 @@ try {
   await page.addInitScript(installBrowserRelay, { token: 'local-test-token', origin });
   await page.goto(origin);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken), 'local-test-token');
+  // A minimal Vuex client fixture checks the serialized functions in real Chromium.
+  await page.evaluate(() => {
+    const subscribers = new Set();
+    const store = {
+      state: { user: { authToken: 'previous-token' }, system: { isAuth: true, socketConnected: true } },
+      commit(type, token) {
+        if (type !== 'user/setAuthToken') throw new Error('Wrong mutation');
+        this.state.user.authToken = token;
+      },
+      subscribe(callback) { subscribers.add(callback); return () => subscribers.delete(callback); },
+    };
+    document.body.__vue__ = { $store: store, $socketActions: { authorize() {
+      store.state.user.tokenModel = { tokenInfo: { authToken: store.state.user.authToken } };
+      subscribers.forEach(callback => callback({ type: 'user/socket_auth.successToken' }));
+      const saved = JSON.parse(localStorage.getItem('storage_audio_v2'));
+      saved.user.authToken = store.state.user.authToken;
+      localStorage.setItem('storage_audio_v2', JSON.stringify(saved));
+    } } };
+  });
+  await page.waitForFunction(audioClientReady);
+  assert.deepEqual(await page.evaluate(authorizeAudioToken, { token: 'local-test-token' }), { ok: true, reason: 'accepted' });
+  assert.deepEqual(await page.evaluate(audioTokenMatches, 'local-test-token'), { ok: true, reason: 'accepted' });
   await page.evaluate(async () => {
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (mic.getAudioTracks().length !== 1) throw new Error('Silent microphone missing');
@@ -68,8 +91,9 @@ try {
   assert(frames.some(frame => frame.some(byte => byte !== 0)), 'Remote audio is silent');
   await page.evaluate(() => window.testPeers.forEach(peer => peer.close()));
   await page.waitForFunction(() => window.__nektoRelay.tracks === 0);
-  console.log('Browser integration passed: real WebRTC audio -> 48 kHz stereo PCM; token injection; silent mic; cleanup.');
+  console.log('Browser integration passed: real WebRTC audio -> 48 kHz stereo PCM; storage injection; Vuex authorization fixture; silent mic; cleanup.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
 }
+

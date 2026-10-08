@@ -129,7 +129,7 @@ client.on(Events.InteractionCreate, async interaction => {
       case 'leave': await leave(); message = 'Stopped Nekto and left voice.'; break;
       case 'status': {
         const status = await browser.status();
-        message = `Discord voice: ${session?.connection.state.status || 'disconnected'}\nNekto: ${status.active ? (status.tracks ? 'receiving audio' : 'open/searching') : 'stopped'}\nToken: ${store.value ? 'saved' : 'not set'}\nAudio frames received: ${queue.received}\nAudio frames containing sound: ${queue.nonSilent}\nLast failure: ${status.lastFailure ? `${status.lastFailure.code}: ${status.lastFailure.message}` : 'none'}\n${status.error || ''}`;
+        message = `Discord voice: ${session?.connection.state.status || 'disconnected'}\nNekto: ${status.active ? (status.tracks ? 'receiving audio' : 'open/searching') : 'stopped'}\nLive token authorization: ${status.authorization || 'unconfirmed'}\nToken: ${store.value ? 'saved' : 'not set'}\nAudio frames received: ${queue.received}\nAudio frames containing sound: ${queue.nonSilent}\nLast failure: ${status.lastFailure ? `${status.lastFailure.code}: ${status.lastFailure.message}` : 'none'}\n${status.error || ''}`;
         break;
       }
     }
@@ -197,3 +197,4 @@ try {
   console.error(`Bot startup failed (${safeError(error)}). Check DISCORD_TOKEN and the browser installation.`);
   await shutdown(); process.exitCode = 1;
 }
+
