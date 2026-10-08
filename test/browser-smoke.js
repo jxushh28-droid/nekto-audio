@@ -44,15 +44,23 @@ try {
   assert.equal(authorization.ok, true);
   assert.equal(authorization.reason, 'native-session-confirmed');
   assert.equal(authorization.diagnostics.identityPresent, true);
-  await page.evaluate(async () => {
+  const connectLoopback = async (suppressTrackEvents = false) => {
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (mic.getAudioTracks().length !== 1) throw new Error('Silent microphone missing');
     const audio = new AudioContext({ sampleRate: 48000 });
     const source = audio.createOscillator(); source.frequency.value = 440;
     const output = audio.createMediaStreamDestination(); source.connect(output); source.start(); await audio.resume();
     window.testAudio = audio; window.testTone = source;
-    const sender = new RTCPeerConnection({ iceServers: [] });
-    const receiver = new RTCPeerConnection({ iceServers: [] });
+    const prototype = RTCPeerConnection.prototype;
+    const nativeAdd = prototype.addEventListener;
+    if (suppressTrackEvents) prototype.addEventListener = function(type, ...args) {
+      if (type !== 'track') return nativeAdd.call(this, type, ...args);
+    };
+    let sender, receiver;
+    try {
+      sender = new RTCPeerConnection({ iceServers: [] });
+      receiver = new RTCPeerConnection({ iceServers: [] });
+    } finally { prototype.addEventListener = nativeAdd; }
     window.testPeers = [sender, receiver];
     sender.addTrack(output.stream.getAudioTracks()[0], output.stream);
     const toReceiver = []; const toSender = [];
@@ -72,7 +80,8 @@ try {
     await receiver.setLocalDescription(await receiver.createAnswer());
     await sender.setRemoteDescription(receiver.localDescription);
     for (const candidate of toSender) await sender.addIceCandidate(candidate);
-  });
+  };
+  await page.evaluate(connectLoopback, false);
   await page.waitForFunction(() => window.testPeers.every(peer => peer.connectionState === 'connected'), null, { timeout: 10000 });
   const deadline = Date.now() + 10000;
   while (!frames.some(frame => frame.some(byte => byte !== 0)) && Date.now() < deadline) {
@@ -90,9 +99,32 @@ try {
     }))));
   }
   assert(frames.some(frame => frame.some(byte => byte !== 0)), 'Remote audio is silent');
-  await page.evaluate(() => window.testPeers.forEach(peer => peer.close()));
+  await page.waitForFunction(() => window.__nektoRelay.inboundPackets > 0);
+  const diagnostics = await page.evaluate(() => window.__nektoRelay);
+  assert.equal(diagnostics.audioState, 'running');
+  assert.equal(diagnostics.peers, 2); assert.equal(diagnostics.tracks, 1);
+  assert(diagnostics.trackEvents > 0); assert(diagnostics.inboundBytes > 0);
+  assert(diagnostics.peerStates.every(state => state === 'connected'));
+  assert.equal(diagnostics.bindingErrors, 0);
+  const closeLoopback = () => {
+    window.testPeers.forEach(peer => peer.close());
+    window.testTone.stop(); return window.testAudio.close();
+  };
+  await page.evaluate(closeLoopback);
   await page.waitForFunction(() => window.__nektoRelay.tracks === 0);
-  console.log('Browser integration passed: real WebRTC audio -> 48 kHz stereo PCM; storage injection; native audio registration fixture; silent mic; cleanup.');
+  assert.equal(await page.evaluate(() => window.__nektoRelay.peers), 0);
+  frames.length = 0;
+  await page.evaluate(connectLoopback, true);
+  await page.waitForFunction(() => window.__nektoRelay.tracks === 1);
+  const recoveryDeadline = Date.now() + 10000;
+  while (!frames.some(frame => frame.some(byte => byte !== 0)) && Date.now() < recoveryDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert(frames.some(frame => frame.some(byte => byte !== 0)), 'Missed track event was not recovered');
+  assert.equal(await page.evaluate(() => window.__nektoRelay.trackEvents), diagnostics.trackEvents);
+  await page.evaluate(closeLoopback);
+  await page.waitForFunction(() => window.__nektoRelay.tracks === 0);
+  console.log('Browser integration passed: WebRTC -> 48 kHz stereo PCM; missed track event recovery; peer diagnostics; native audio registration; cleanup.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

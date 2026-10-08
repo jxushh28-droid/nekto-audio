@@ -18,7 +18,11 @@ export function installBrowserRelay({ token, origin }) {
   const audio = new AudioContext({ sampleRate: 48000 });
   const mix = audio.createGain();
   const tracks = new Map();
-  window.__nektoRelay = { tracks: 0, frames: 0, error: null };
+  const peers = new Set();
+  const pendingTracks = new Set();
+  window.__nektoRelay = { tracks: 0, trackEvents: 0, frames: 0, error: null, bindingErrors: 0,
+    peers: 0, peerStates: [], iceStates: [], inboundPackets: 0, inboundBytes: 0, audioState: audio.state };
+  audio.addEventListener('statechange', () => { window.__nektoRelay.audioState = audio.state; });
   let pending = 0;
   const send = (buffer) => {
     if (!tracks.size || pending >= 3) return;
@@ -28,7 +32,7 @@ export function installBrowserRelay({ token, origin }) {
     pending++;
     window.pushNektoAudio(btoa(binary))
       .then(() => { window.__nektoRelay.frames++; })
-      .catch(() => {})
+      .catch(() => { window.__nektoRelay.bindingErrors++; })
       .finally(() => { pending--; });
   };
   const processorCode = `
@@ -77,33 +81,79 @@ export function installBrowserRelay({ token, origin }) {
     return silentMic.stream.clone();
   };
   const capture = async (track) => {
-    if (track.kind !== 'audio' || tracks.has(track.id)) return;
-    await ready;
-    if (track.readyState === 'ended' || tracks.has(track.id)) return;
-    const stream = new MediaStream([track]);
-    // Chromium's WebRTC jitter buffer needs an active media-element sink to start playout.
-    const playback = document.createElement('audio');
-    playback.srcObject = stream;
-    playback.autoplay = true;
-    await playback.play();
-    const source = audio.createMediaStreamSource(stream);
-    source.connect(mix);
-    tracks.set(track.id, { source, playback });
-    window.__nektoRelay.tracks = tracks.size;
-    track.addEventListener('ended', () => {
-      source.disconnect(); playback.pause(); playback.srcObject = null;
-      tracks.delete(track.id); window.__nektoRelay.tracks = tracks.size;
-    }, { once: true });
+    if (track.kind !== 'audio' || tracks.has(track.id) || pendingTracks.has(track.id)) return;
+    pendingTracks.add(track.id);
+    let playback, source;
+    try {
+      await ready; await audio.resume();
+      if (track.readyState === 'ended' || tracks.has(track.id)) return;
+      const stream = new MediaStream([track]);
+      // Chromium's WebRTC jitter buffer needs an active media-element sink to start playout.
+      playback = document.createElement('audio');
+      playback.srcObject = stream;
+      playback.autoplay = true;
+      await playback.play();
+      if (track.readyState === 'ended') { playback.pause(); playback.srcObject = null; return; }
+      source = audio.createMediaStreamSource(stream);
+      source.connect(mix);
+      tracks.set(track.id, { source, playback });
+      window.__nektoRelay.tracks = tracks.size;
+      track.addEventListener('ended', () => {
+        source.disconnect(); playback.pause(); playback.srcObject = null;
+        tracks.delete(track.id); window.__nektoRelay.tracks = tracks.size;
+      }, { once: true });
+    } catch (error) {
+      source?.disconnect(); playback?.pause();
+      if (playback) playback.srcObject = null;
+      throw error;
+    } finally { pendingTracks.delete(track.id); }
   };
+  const recoverTracks = peer => {
+    if (peer.connectionState !== 'connected') return;
+    for (const transceiver of peer.getTransceivers()) {
+      if (!['sendrecv', 'recvonly'].includes(transceiver.currentDirection)) continue;
+      const track = transceiver.receiver?.track;
+      if (track) capture(track).catch(() => { window.__nektoRelay.error = 'Remote audio capture failed.'; });
+    }
+  };
+  let sampling = false;
+  const diagnosticsTimer = setInterval(async () => {
+    if (sampling) return;
+    sampling = true;
+    try {
+      const current = [...peers];
+      window.__nektoRelay.peers = current.length;
+      window.__nektoRelay.peerStates = current.map(peer => peer.connectionState);
+      window.__nektoRelay.iceStates = current.map(peer => peer.iceConnectionState);
+      let packets = 0, bytes = 0;
+      for (const peer of current) {
+        recoverTracks(peer);
+        const stats = await peer.getStats().catch(() => null);
+        for (const entry of stats?.values() || []) {
+          if (entry.type === 'inbound-rtp' && (entry.kind === 'audio' || entry.mediaType === 'audio')) {
+            packets += entry.packetsReceived || 0; bytes += entry.bytesReceived || 0;
+          }
+        }
+      }
+      window.__nektoRelay.inboundPackets = packets; window.__nektoRelay.inboundBytes = bytes;
+    } catch {} finally { sampling = false; }
+  }, 1000);
+  window.addEventListener('pagehide', () => clearInterval(diagnosticsTimer), { once: true });
   const Native = window.RTCPeerConnection;
   const RelayPeer = new Proxy(Native, {
     construct(Target, args) {
       const peer = new Target(...args);
+      peers.add(peer);
+      window.__nektoRelay.peers = peers.size;
       peer.addEventListener('track', ({ track }) => {
+        if (track.kind === 'audio') window.__nektoRelay.trackEvents++;
         capture(track).catch(() => { window.__nektoRelay.error = 'Remote audio capture failed.'; });
       });
       const cleanup = () => {
+        recoverTracks(peer);
         if (!['closed', 'failed'].includes(peer.connectionState)) return;
+        if (peer.connectionState === 'closed') peers.delete(peer);
+        window.__nektoRelay.peers = peers.size;
         for (const receiver of peer.getReceivers()) {
           const captured = tracks.get(receiver.track?.id);
           if (captured) {
@@ -122,3 +172,4 @@ export function installBrowserRelay({ token, origin }) {
   window.RTCPeerConnection = RelayPeer;
   if (window.webkitRTCPeerConnection === Native) window.webkitRTCPeerConnection = RelayPeer;
 }
+

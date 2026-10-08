@@ -2,14 +2,14 @@ import { chromium } from 'playwright';
 import { installBrowserRelay } from './browser-init.js';
 import { searchError } from './search-error.js';
 import { audioClientReady, confirmAudioToken, authorizationError } from './live-session.js';
+import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
-const START = /^(Начать разговор|Начать поиск|Start conversation|Start search|Әңгімелесуді бастау)$/i;
 
 export class NektoBrowser {
   constructor(onAudio) {
     this.onAudio = onAudio; this.page = null; this.browser = null; this.context = null;
-    this.generation = 0; this.lastFailure = null; this.authorizationDiagnostics = null;
+    this.generation = 0; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null;
   }
   async launch() {
     if (!this.browser) this.browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ['--mute-audio'], args: [
@@ -20,7 +20,7 @@ export class NektoBrowser {
   async search(token) {
     const generation = ++this.generation;
     const previous = this.context;
-    this.page = null; this.context = null; this.lastFailure = null; this.authorizationDiagnostics = null;
+    this.page = null; this.context = null; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null;
     const check = () => {
       if (generation !== this.generation) throw new Error('Nekto search was stopped.');
     };
@@ -64,8 +64,10 @@ export class NektoBrowser {
       check();
       await page.evaluate(reason => { window.__nektoRelay.authorization = reason; }, authorization.reason);
       stage = 'control';
-      const button = page.getByRole('button', { name: START }).first();
+      const button = page.locator('#searchCompanyBtn');
       await button.waitFor({ state: 'visible', timeout: 30000 });
+      const cookies = page.locator('#acceptCookies');
+      if (await cookies.isVisible() && await cookies.isEnabled()) await cookies.click({ timeout: 3000 });
       const blocked = await page.getByText(/verify you are human|checking your browser|unusual traffic/i).count();
       if (blocked) throw new Error('Nekto is asking for browser verification. Automatic search stopped.');
       const captureError = await page.evaluate(() => window.__nektoRelay?.error);
@@ -78,11 +80,10 @@ export class NektoBrowser {
       stage = 'click';
       await button.click();
       stage = 'confirm';
-      await page.waitForFunction(() => {
-        const start = [...document.querySelectorAll('button')].find(b =>
-          /^(Начать разговор|Начать поиск|Start conversation|Start search|Әңгімелесуді бастау)$/i.test(b.textContent.trim()));
-        return window.__nektoRelay?.tracks > 0 || !start || start.disabled || start.offsetParent === null;
-      }, null, { timeout: 15000 });
+      this.callState = await waitForAudioSearch(page, { check });
+      if (this.callState.verification) throw authorizationError('verification-required');
+      if (this.callState.restricted) throw authorizationError('native-restriction');
+      if (this.callState.attention) throw searchError('attention');
       check();
       const confirmedIdentity = await page.evaluate(confirmAudioToken, { token, timeout: 3000 });
       check();
@@ -96,7 +97,7 @@ export class NektoBrowser {
       if (cancelled) throw new Error('Nekto search was stopped.');
       const known = ['Nekto is asking for browser verification. Automatic search stopped.',
         'Audio capture initialization failed.', 'Remote audio capture failed.'];
-      const failure = known.includes(error.message) || /^NEKTO_(VUEX_|AUTH_|TOKEN_|VERIFICATION$|REGISTRATION$|RESTRICTED$)/.test(error.code || '')
+      const failure = known.includes(error.message) || /^NEKTO_(VUEX_|AUTH_|TOKEN_|VERIFICATION$|REGISTRATION$|RESTRICTED$|ATTENTION$)/.test(error.code || '')
         ? error : searchError(stage);
       this.lastFailure = { code: failure.code || 'NEKTO_CAPTURE_OR_VERIFICATION', message: failure.message };
       throw failure;
@@ -104,9 +105,10 @@ export class NektoBrowser {
   }
   async status() {
     const page = this.page;
-    if (!page || page.isClosed()) return { active: false, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics };
+    if (!page || page.isClosed()) return { active: false, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState };
+    this.callState = await page.evaluate(readAudioCallState);
     const status = await page.evaluate(() => ({ active: true, ...window.__nektoRelay }));
-    return { ...status, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics };
+    return { ...status, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState };
   }
   async stop() {
     this.generation++;

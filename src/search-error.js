@@ -4,6 +4,7 @@ const failures = {
   control: ['NEKTO_START_CONTROL', 'Nekto start control was not found. The site may still be loading, require verification, or use different controls.'],
   click: ['NEKTO_START_CLICK', 'Nekto start control could not be activated.'],
   confirm: ['NEKTO_SEARCH_UNCONFIRMED', 'Nekto did not confirm a search after starting. The token may be rejected or the site may need another step.'],
+  attention: ['NEKTO_ATTENTION', 'Nekto is waiting for a response to a website prompt. Automatic search stopped.'],
 };
 
 export function searchError(stage) {

@@ -9,6 +9,7 @@ import {
 import { NektoBrowser } from './nekto.js';
 import { PcmQueue, PcmStream } from './pcm.js';
 import { TokenStore } from './token-store.js';
+import { statusReply } from './status-reply.js';
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 const store = new TokenStore(process.env.DATA_DIR || './data', process.env.NEKTO_AUTH_TOKEN || '');
@@ -106,7 +107,7 @@ client.on(Events.InteractionCreate, async interaction => {
   busy = true;
   try {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    let message;
+    let message, privateStatus;
     switch (interaction.commandName) {
       case 'token': {
         await store.set(interaction.options.getString('token', true));
@@ -129,13 +130,11 @@ client.on(Events.InteractionCreate, async interaction => {
       case 'leave': await leave(); message = 'Stopped Nekto and left voice.'; break;
       case 'status': {
         const status = await browser.status();
-        const diagnostics = status.authorizationDiagnostics;
-        const registration = diagnostics ? `\nAudio registration: authenticated=${diagnostics.authenticated}; socket=${diagnostics.socketConnected}; identity=${diagnostics.identityPresent}\nAudio token checks: storage=${diagnostics.savedTokenMatches}; live=${diagnostics.liveTokenMatches}\nAudio restrictions: captcha=${diagnostics.captcha || diagnostics.hcaptcha}; restricted=${diagnostics.restricted}; registration error=${diagnostics.registrationError}` : '';
-        message = `Discord voice: ${session?.connection.state.status || 'disconnected'}\nNekto: ${status.active ? (status.tracks ? 'receiving audio' : 'open/searching') : 'stopped'}\nLive token authorization: ${status.authorization || 'unconfirmed'}\nToken: ${store.value ? 'saved' : 'not set'}\nAudio frames received: ${queue.received}\nAudio frames containing sound: ${queue.nonSilent}${registration}\nLast failure: ${status.lastFailure ? `${status.lastFailure.code}: ${status.lastFailure.message}` : 'none'}\n${status.error || ''}`;
+        privateStatus = statusReply({ status, voice: session?.connection.state.status || 'disconnected', token: store.value, queue });
         break;
       }
     }
-    await interaction.editReply({ content: message });
+    await interaction.editReply(privateStatus || { content: message });
   } catch (error) {
     console.error(`Relay command /${interaction.commandName} failed (${safeError(error)}).`);
     const publicMessages = /^(Set your Nekto|Join a regular|Give the bot|Nekto |Remote audio|Audio capture|Could not establish|Could not read|Token must|Use \/join|Join my voice|Join the voice)/;
