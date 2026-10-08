@@ -7,7 +7,7 @@ const START = /^(Начать разговор|Начать поиск|Start con
 export class NektoBrowser {
   constructor(onAudio) { this.onAudio = onAudio; this.page = null; this.browser = null; this.context = null; }
   async launch() {
-    if (!this.browser) this.browser = await chromium.launch({ headless: true, args: [
+    if (!this.browser) this.browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ['--mute-audio'], args: [
       '--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
     ] });
