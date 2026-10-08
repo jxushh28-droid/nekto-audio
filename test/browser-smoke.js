@@ -13,7 +13,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 let browser;
 try {
-  browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
+  browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH, ignoreDefaultArgs: ['--mute-audio'], args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
   const page = await browser.newPage();
   const frames = [];
   await page.exposeBinding('pushNektoAudio', (_, base64) => frames.push(Buffer.from(base64, 'base64')));
@@ -57,13 +57,13 @@ try {
   assert(frames.length > 0, 'No WebRTC PCM reached Node');
   assert(frames.every(frame => frame.length === FRAME_BYTES), 'Incorrect frame format');
   if (!frames.some(frame => frame.some(byte => byte !== 0))) {
-    console.log('Audio test diagnostics:', await page.evaluate(async () => ({
+    console.log('Audio test diagnostics:', JSON.stringify(await page.evaluate(async () => ({
       relay: window.__nektoRelay, audioState: window.testAudio.state, audioTime: window.testAudio.currentTime,
       peers: await Promise.all(window.testPeers.map(async peer => ({
         connection: peer.connectionState,
         stats: [...(await peer.getStats()).values()].filter(s => ['inbound-rtp', 'outbound-rtp', 'media-source'].includes(s.type)),
       }))),
-    })));
+    }))));
   }
   assert(frames.some(frame => frame.some(byte => byte !== 0)), 'Remote audio is silent');
   await page.evaluate(() => window.testPeers.forEach(peer => peer.close()));
