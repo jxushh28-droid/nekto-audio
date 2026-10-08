@@ -1,6 +1,6 @@
 # Nekto audio → Discord
 
-An owner-controlled Discord bot that joins your voice channel, opens https://nekto-me.kz/audiochat in headless Chromium, sets `storage_audio_v2.user.authToken` before the app loads, starts a search, and plays incoming WebRTC audio through Discord.
+An owner-controlled Discord bot that joins your voice channel, opens https://nekto-me.kz/audiochat#/ in headless Chromium, sets `storage_audio_v2.user.authToken` before the app loads, starts a search, and plays incoming WebRTC audio through Discord.
 
 This is an **incoming-only** relay. Nekto receives a silent microphone; your Discord microphone is not forwarded. Audio is processed in memory, with no recordings. People in your Discord voice channel can hear the Nekto participant.
 
@@ -8,14 +8,14 @@ This is an **incoming-only** relay. Nekto receives a silent microphone; your Dis
 
 | Command | Action |
 | --- | --- |
-| `/token token:<value>` | Save or replace your Nekto auth token. Stops the current Nekto session. |
+| `/token token:<value>` | Save or replace your Nekto auth token; restart search if you are in the bot's voice channel. |
 | `/join` | Join your current regular voice channel and search on Nekto. |
 | `/next` | End the Nekto call and start a fresh search. |
 | `/stop` | Close Nekto while remaining in Discord voice. |
 | `/leave` | Close Nekto and leave Discord voice. |
-| `/status` | Show connection and incoming-audio status privately. |
+| `/status` | Show connection state, sound counters, and the last search failure privately. |
 
-Use `/token`, join a voice channel yourself, then use `/join`. Changing the token requires `/next` or `/join` to start a new search. Replies are ephemeral. The bot never logs token values. Only the Discord application owner can control it unless `BOT_OWNER_IDS` is configured. The bot disconnects when the controlling user leaves or moves out of its voice channel.
+Use `/token`, join a voice channel yourself, then use `/join`. Changing the token restarts search when you are in the bot's voice channel. Replies are ephemeral. The bot never logs token values. Only the Discord application owner can control it unless `BOT_OWNER_IDS` is configured. The bot disconnects when the controlling user leaves or moves out of its voice channel.
 
 ## Discord setup
 

@@ -7,12 +7,14 @@ import vm from 'node:vm';
 import { PcmQueue, FRAME_BYTES } from '../src/pcm.js';
 import { TokenStore } from '../src/token-store.js';
 import { installBrowserRelay } from '../src/browser-init.js';
+import { searchError } from '../src/search-error.js';
 
 test('audio queue rejects malformed frames and bounds latency', () => {
   const queue = new PcmQueue(2);
   assert.equal(queue.accept('bad'), false);
   for (const value of [1, 2, 3]) assert.equal(queue.accept(Buffer.alloc(FRAME_BYTES, value).toString('base64')), true);
   assert.equal(queue.received, 3); assert.equal(queue.dropped, 1);
+  assert.equal(queue.nonSilent, 3);
   assert.equal(queue.next()[0], 2); assert.equal(queue.next()[0], 3);
   assert.deepEqual(queue.next(), Buffer.alloc(FRAME_BYTES));
 });
@@ -52,4 +54,13 @@ test('token is never injected into third-party frames', () => {
     location: { origin: 'https://other.example' }, localStorage: { setItem() { wrote = true; } },
   });
   assert.equal(wrote, false);
+});
+
+test('search diagnostics identify the failing stage without reflecting credentials', () => {
+  const errors = ['load', 'control', 'click', 'confirm'].map(searchError);
+  assert.equal(new Set(errors.map(error => error.code)).size, 4);
+  for (const error of errors) assert(error.message.startsWith('Nekto '));
+  const unknown = searchError('secret-token-value');
+  assert.equal(unknown.code, 'NEKTO_SETUP');
+  assert(!unknown.message.includes('secret-token-value'));
 });

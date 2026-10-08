@@ -35,13 +35,13 @@ const commands = [
 async function leave() {
   const previous = session;
   session = null;
-  await browser.stop();
   queue.clear();
   if (previous) {
     previous.player.stop(true);
     previous.stream.destroy();
     if (previous.connection.state.status !== VoiceConnectionStatus.Destroyed) previous.connection.destroy();
   }
+  await browser.stop();
 }
 
 async function join(interaction) {
@@ -80,12 +80,13 @@ async function join(interaction) {
     connection.subscribe(player);
     player.play(createAudioResource(stream, { inputType: StreamType.Raw }));
     await entersState(player, AudioPlayerStatus.Playing, 5000);
-    return await browser.search(store.value);
   } catch (error) {
     await leave();
     if (/Set your|Join the|Nekto|capture/i.test(error.message)) throw error;
     throw new Error('Could not establish Discord voice. Check Connect/Speak permissions and try /join again.');
   }
+  // Keep Discord voice connected if the website search fails.
+  return browser.search(store.value);
 }
 
 client.on(Events.InteractionCreate, async interaction => {
@@ -111,6 +112,10 @@ client.on(Events.InteractionCreate, async interaction => {
         await store.set(interaction.options.getString('token', true));
         await browser.stop(); queue.clear();
         message = 'Nekto token saved. Use /join to start, or /next if I am already in your voice channel.';
+        if (session?.guildId === interaction.guildId) {
+          const member = await interaction.guild.members.fetch(interaction.user.id);
+          if (member.voice.channelId === session?.channelId) message = `Nekto token saved. ${await browser.search(store.value)}`;
+        }
         break;
       }
       case 'join': message = await join(interaction); break;
@@ -124,13 +129,13 @@ client.on(Events.InteractionCreate, async interaction => {
       case 'leave': await leave(); message = 'Stopped Nekto and left voice.'; break;
       case 'status': {
         const status = await browser.status();
-        message = `Discord voice: ${session?.connection.state.status || 'disconnected'}\nNekto: ${status.active ? (status.tracks ? 'receiving audio' : 'open/searching') : 'stopped'}\nToken: ${store.value ? 'saved' : 'not set'}\nAudio frames received: ${queue.received}\n${status.error || ''}`;
+        message = `Discord voice: ${session?.connection.state.status || 'disconnected'}\nNekto: ${status.active ? (status.tracks ? 'receiving audio' : 'open/searching') : 'stopped'}\nToken: ${store.value ? 'saved' : 'not set'}\nAudio frames received: ${queue.received}\nAudio frames containing sound: ${queue.nonSilent}\nLast failure: ${status.lastFailure ? `${status.lastFailure.code}: ${status.lastFailure.message}` : 'none'}\n${status.error || ''}`;
         break;
       }
     }
     await interaction.editReply({ content: message });
   } catch (error) {
-    console.error(`Relay command failed (${safeError(error)}).`);
+    console.error(`Relay command /${interaction.commandName} failed (${safeError(error)}).`);
     const publicMessages = /^(Set your Nekto|Join a regular|Give the bot|Nekto |Remote audio|Audio capture|Could not establish|Could not read|Token must|Use \/join|Join my voice|Join the voice)/;
     const message = publicMessages.test(error.message) ? error.message : 'The relay operation failed. Check Railway runtime logs for the error category, then try again.';
     if (interaction.deferred) await interaction.editReply({ content: message }).catch(() => {});

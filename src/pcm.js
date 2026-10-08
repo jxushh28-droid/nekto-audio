@@ -5,6 +5,7 @@ export const FRAME_BYTES = 960 * 2 * 2; // 20 ms, 48 kHz, stereo, signed 16-bit 
 export class PcmQueue {
   frames = [];
   received = 0;
+  nonSilent = 0;
   dropped = 0;
   constructor(maxFrames = 6) { this.maxFrames = maxFrames; }
   accept(base64) {
@@ -12,6 +13,7 @@ export class PcmQueue {
     const frame = Buffer.from(base64, 'base64');
     if (frame.length !== FRAME_BYTES) return false;
     this.received++;
+    if (frame.some(byte => byte !== 0)) this.nonSilent++;
     if (this.frames.length >= this.maxFrames) { this.frames.shift(); this.dropped++; }
     this.frames.push(frame);
     return true;
