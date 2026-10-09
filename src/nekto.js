@@ -1,4 +1,6 @@
 import { chromium } from 'playwright';
+import { mkdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { installBrowserRelay, inspectBrowserMicrophone } from './browser-init.js';
 import { searchError } from './search-error.js';
 import { audioClientReady, confirmAudioToken, authorizationError } from './live-session.js';
@@ -6,23 +8,26 @@ import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
+import { writeTokenExtension, extensionBrowserOptions } from './token-extension.js';
 
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 
 export class NektoBrowser {
-  constructor(onAudio) {
+  constructor(onAudio, directory = process.env.DATA_DIR || './data') {
     this.onAudio = onAudio; this.page = null; this.browser = null; this.context = null;
     this.generation = 0; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
     this.forwarding = false;
     this.authorization = null; this.observedStage = null;
+    this.profilePath = resolve(directory, 'nekto-browser');
+    this.extensionPath = resolve(directory, 'nekto-prime');
   }
-  async launch() {
-    if (!this.browser) this.browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ['--mute-audio'], args: [
-      '--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
-      '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-      '--use-fake-device-for-media-stream',
-      '--use-fake-ui-for-media-stream',
-    ] });
+  async launch(token = '') {
+    if (this.context) return this.context;
+    await writeTokenExtension(this.extensionPath, token);
+    await mkdir(this.profilePath, { recursive: true, mode: 0o700 });
+    const context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath));
+    this.context = context; this.browser = context.browser();
+    return context;
   }
   async search(token) {
     this.forwarding = false;
@@ -38,20 +43,19 @@ export class NektoBrowser {
     try {
       if (previous) await previous.close().catch(() => {});
       check();
-      await this.launch();
+      context = await this.launch(token);
       check();
-      context = await this.browser.newContext();
       await context.grantPermissions(['microphone'], { origin: new URL(NEKTO_URL).origin });
       check();
       this.context = context;
-      const page = await context.newPage();
+      const page = context.pages()[0] || await context.newPage();
       check();
       this.page = page;
       await page.exposeBinding('pushNektoAudio', ({ frame }, base64) => {
         if (this.forwarding && generation === this.generation && frame === page.mainFrame() &&
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
       });
-      await page.addInitScript(installBrowserRelay, { token, origin: new URL(NEKTO_URL).origin });
+      await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       stage = 'load';
       const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -100,7 +104,10 @@ export class NektoBrowser {
     } catch (error) {
       const cancelled = generation !== this.generation;
       if (!cancelled) await this.stop();
-      else await context?.close().catch(() => {});
+      else {
+        await context?.close().catch(() => {});
+        if (this.context === context) { this.page = null; this.context = null; this.browser = null; }
+      }
       if (cancelled) throw new Error('Nekto search was stopped.');
       const known = ['Nekto is asking for browser verification. Automatic search stopped.',
         'Audio capture initialization failed.', 'Remote audio capture failed.'];
@@ -179,6 +186,7 @@ export class NektoBrowser {
     this.forwarding = false;
     const context = this.context;
     this.page = null; this.context = null;
+    this.browser = null;
     if (context) await context.close().catch(() => {});
   }
   async close() {

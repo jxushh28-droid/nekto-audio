@@ -175,7 +175,7 @@ process.on('SIGINT', () => void shutdown());
 try {
   if (!process.env.DISCORD_TOKEN) throw new Error('DISCORD_TOKEN is required.');
   await store.load();
-  await browser.launch(); // Verify the browser install before reporting healthy.
+  await browser.launch(store.value); // Verify Chromium with the extension before reporting healthy.
   client.once(Events.ClientReady, async () => {
     try {
       await client.application.fetch();

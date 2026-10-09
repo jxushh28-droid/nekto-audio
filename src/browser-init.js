@@ -1,20 +1,6 @@
 // Serialized by Playwright and run before the site's scripts.
-export function installBrowserRelay({ token, origin }) {
+export function installBrowserRelay({ origin }) {
   if (location.origin !== origin) return;
-  const KEY = 'storage_audio_v2';
-  const write = () => {
-    try {
-      let saved;
-      try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { saved = {}; }
-      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) saved = {};
-      if (!saved.user || typeof saved.user !== 'object' || Array.isArray(saved.user)) saved.user = {};
-      saved.user.authToken = token;
-      localStorage.setItem(KEY, JSON.stringify(saved));
-      return true;
-    } catch { return false; }
-  };
-  if (!write()) document.addEventListener('readystatechange', write, { once: true });
-
   const audio = new AudioContext({ sampleRate: 48000 });
   const mix = audio.createGain();
   const tracks = new Map();

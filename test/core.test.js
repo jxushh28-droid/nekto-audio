@@ -32,20 +32,13 @@ test('token saves privately and survives process restarts', async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test('token injection preserves settings and repairs malformed storage', () => {
-  for (const saved of ['{"settings":{"theme":"dark"},"user":{"id":7}}', 'broken', 'null', '[]', '{"user":"bad"}']) {
-    const storage = new Map([['storage_audio_v2', saved]]);
-    const context = {
-      location: { origin: 'https://nekto-me.kz' },
-      localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) },
-      document: { addEventListener() {} },
-      AudioContext: class { constructor() { throw new Error('stop after storage injection'); } },
-    };
-    assert.throws(() => vm.runInNewContext(`(${installBrowserRelay.toString()})({token:'new-token',origin:'https://nekto-me.kz'})`, context));
-    const result = JSON.parse(storage.get('storage_audio_v2'));
-    assert.equal(result.user.authToken, 'new-token');
-    if (saved.startsWith('{"settings"')) { assert.equal(result.settings.theme, 'dark'); assert.equal(result.user.id, 7); }
-  }
+test('audio relay leaves extension token storage untouched', () => {
+  let writes = 0;
+  assert.throws(() => vm.runInNewContext(`(${installBrowserRelay.toString()})({origin:'https://nekto-me.kz'})`, {
+    location: { origin: 'https://nekto-me.kz' }, localStorage: { setItem() { writes++; } },
+    AudioContext: class { constructor() { throw new Error('stop before audio setup'); } },
+  }), /stop before audio setup/);
+  assert.equal(writes, 0);
 });
 
 test('token is never injected into third-party frames', () => {
@@ -64,3 +57,4 @@ test('search diagnostics identify the failing stage without reflecting credentia
   assert.equal(unknown.code, 'NEKTO_SETUP');
   assert(!unknown.message.includes('secret-token-value'));
 });
+

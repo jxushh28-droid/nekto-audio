@@ -1,30 +1,50 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { installBrowserRelay, inspectBrowserMicrophone } from '../src/browser-init.js';
 import { FRAME_BYTES } from '../src/pcm.js';
 import { audioClientReady, confirmAudioToken } from '../src/live-session.js';
 import { readAudioPrompt } from '../src/audio-prompt.js';
 import { NektoBrowser } from '../src/nekto.js';
+import { writeTokenExtension, extensionBrowserOptions } from '../src/token-extension.js';
 
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html');
-  response.end('<!doctype html><title>Relay test</title>');
+  response.end('<!doctype html><script>window.tokenAtFirstScript=JSON.parse(localStorage.getItem("storage_audio_v2")||"{}").user?.authToken;</script><title>Relay test</title>');
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
-let browser;
+const directory = await mkdtemp(join(tmpdir(), 'extension-browser-test-'));
+const extensionPath = join(directory, 'extension');
+const profilePath = join(directory, 'profile');
+let context;
 try {
-  browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH, ignoreDefaultArgs: ['--mute-audio'], args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
-  const context = await browser.newContext();
+  await writeTokenExtension(extensionPath, 'local-test-token', { matches: ['http://127.0.0.1/*'] });
+  context = await chromium.launchPersistentContext(profilePath, {
+    ...extensionBrowserOptions(extensionPath), executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
+  });
   await context.grantPermissions(['microphone'], { origin });
   const page = await context.newPage();
   const frames = [];
   await page.exposeBinding('pushNektoAudio', (_, base64) => frames.push(Buffer.from(base64, 'base64')));
-  await page.addInitScript(installBrowserRelay, { token: 'local-test-token', origin });
+  await page.addInitScript(installBrowserRelay, { origin });
   await page.goto(origin);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken), 'local-test-token');
+  assert.equal(await page.evaluate(() => window.tokenAtFirstScript), 'local-test-token', 'Extension did not run before page scripts');
+  const child = await page.evaluate(() => new Promise(resolve => {
+    const frame = document.createElement('iframe'); frame.src = '/frame';
+    frame.onload = () => resolve(frame.contentWindow.tokenAtFirstScript); document.body.append(frame);
+  }));
+  assert.equal(child, 'local-test-token', 'all_frames did not apply to same-origin frames');
+  const unmatched = await context.newPage();
+  await unmatched.route('http://unmatched.invalid/**', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Unmatched fixture</title>' }));
+  await unmatched.goto('http://unmatched.invalid/');
+  assert.equal(await unmatched.evaluate(() => localStorage.getItem('storage_audio_v2')), null);
+  await unmatched.close();
   const microphone = await page.evaluate(inspectBrowserMicrophone);
   assert.equal(microphone.permission, 'granted');
   assert(microphone.inputs > 0); assert.equal(microphone.legacyApi, true);
@@ -196,9 +216,22 @@ try {
     document.body.append(modal);
   });
   assert.equal((await page.evaluate(readAudioPrompt)).category, 'microphone-denied');
-  console.log('Browser integration passed: native next with session reuse; restriction stops; granted microphone permission; modern and legacy capture; WebRTC PCM; missed track recovery; cleanup.');
+  await page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('storage_audio_v2')); saved.settings = { theme: 'fixture-theme' };
+    localStorage.setItem('storage_audio_v2', JSON.stringify(saved));
+  });
+  await context.close(); context = null;
+  await writeTokenExtension(extensionPath, 'replacement-test-token', { matches: ['http://127.0.0.1/*'] });
+  context = await chromium.launchPersistentContext(profilePath, {
+    ...extensionBrowserOptions(extensionPath), executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
+  });
+  const replaced = await context.newPage(); await replaced.goto(origin);
+  assert.equal(await replaced.evaluate(() => window.tokenAtFirstScript), 'replacement-test-token');
+  assert.equal(await replaced.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).settings.theme), 'fixture-theme');
+  console.log('Browser integration passed: real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; native next; restriction diagnostics; microphone; WebRTC PCM; missed track recovery; cleanup.');
 } finally {
-  await browser?.close();
+  await context?.close();
   await new Promise(resolve => server.close(resolve));
+  await rm(directory, { recursive: true, force: true });
 }
 
