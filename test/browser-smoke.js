@@ -5,6 +5,7 @@ import { installBrowserRelay, inspectBrowserMicrophone } from '../src/browser-in
 import { FRAME_BYTES } from '../src/pcm.js';
 import { audioClientReady, confirmAudioToken } from '../src/live-session.js';
 import { readAudioPrompt } from '../src/audio-prompt.js';
+import { NektoBrowser } from '../src/nekto.js';
 
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
@@ -67,6 +68,39 @@ try {
   assert.equal(authorization.ok, true);
   assert.equal(authorization.reason, 'native-session-confirmed');
   assert.equal(authorization.diagnostics.identityPresent, true);
+  // Exercise /next against actual visible DOM controls without a new page or registration.
+  await page.evaluate(() => {
+    const store = document.body.__vue__.$store;
+    store.state.chat = { activeConnectionId: 1 };
+    window.nativeStarts = 0; window.nativeEnds = 0;
+    const end = document.createElement('button'); end.textContent = 'Завершить разговор';
+    const start = document.createElement('button'); start.id = 'searchCompanyBtn'; start.textContent = 'Начать'; start.hidden = true;
+    end.onclick = () => {
+      window.nativeEnds++;
+      const modal = document.createElement('div'); modal.className = 'swal2-popup';
+      modal.textContent = 'Вы уверены, что хотите завершить разговор?';
+      const yes = document.createElement('button'); yes.textContent = 'Да';
+      yes.onclick = () => { store.state.chat.activeConnectionId = null; modal.remove(); end.hidden = true; start.hidden = false; };
+      modal.append(yes); document.body.append(modal);
+    };
+    start.onclick = () => { window.nativeStarts++; store.state.user.isSearching = true; start.hidden = true; };
+    document.body.append(end, start);
+  });
+  const relaySession = new NektoBrowser(() => {});
+  relaySession.page = page;
+  relaySession.context = { close() { throw Error('Unexpected context close'); } };
+  relaySession.browser = { newContext() { throw Error('Unexpected new registration'); } };
+  await relaySession.next('local-test-token');
+  await relaySession.next('local-test-token'); // Already searching: do not click Start again.
+  assert.equal(relaySession.page, page); assert.equal(relaySession.forwarding, true);
+  assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [1, 1]);
+  await page.evaluate(() => { document.body.__vue__.$store.state.system.forceDisconnectReason = 7; });
+  await assert.rejects(relaySession.next('local-test-token'), error => error.code === 'NEKTO_RESTRICTED');
+  assert.equal(relaySession.page, page); assert.equal(relaySession.forwarding, false);
+  await page.evaluate(() => {
+    delete document.body.__vue__.$store.state.system.forceDisconnectReason;
+    document.querySelectorAll('button').forEach(button => button.remove());
+  });
   const connectLoopback = async (suppressTrackEvents = false) => {
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (mic.getAudioTracks().length !== 1) throw new Error('Silent microphone missing');
@@ -153,7 +187,7 @@ try {
     document.body.append(modal);
   });
   assert.equal((await page.evaluate(readAudioPrompt)).category, 'microphone-denied');
-  console.log('Browser integration passed: granted microphone permission; modern and legacy capture; WebRTC PCM; missed track recovery; cleanup.');
+  console.log('Browser integration passed: native next with session reuse; restriction stops; granted microphone permission; modern and legacy capture; WebRTC PCM; missed track recovery; cleanup.');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

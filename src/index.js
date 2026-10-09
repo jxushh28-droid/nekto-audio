@@ -63,7 +63,7 @@ async function join(interaction) {
   const stream = new PcmStream(queue);
   session = { guildId: interaction.guild.id, channelId: channel.id, userId: interaction.user.id, connection, player, stream };
   const current = session;
-  connection.on('error', () => console.error('Discord voice connection error.'));
+  connection.on('error', error => console.error(`Discord voice connection error (${safeError(error)}).`));
   player.on('error', () => { console.error('Audio playback error.'); void leave(); });
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     try {
@@ -124,7 +124,7 @@ client.on(Events.InteractionCreate, async interaction => {
         if (!session || session.guildId !== interaction.guildId) throw new Error('Use /join first.');
         const member = await interaction.guild.members.fetch(interaction.user.id);
         if (member.voice.channelId !== session.channelId) throw new Error('Join my voice channel first.');
-        queue.clear(); message = await browser.search(store.value); break;
+        queue.clear(); message = await browser.next(store.value); break;
       }
       case 'stop': await browser.stop(); queue.clear(); message = 'Nekto stopped.'; break;
       case 'leave': await leave(); message = 'Stopped Nekto and left voice.'; break;

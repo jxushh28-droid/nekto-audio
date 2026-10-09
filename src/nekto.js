@@ -4,6 +4,7 @@ import { searchError } from './search-error.js';
 import { audioClientReady, confirmAudioToken, authorizationError } from './live-session.js';
 import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
+import { advanceAudioCall } from './call-controls.js';
 
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 
@@ -11,6 +12,7 @@ export class NektoBrowser {
   constructor(onAudio) {
     this.onAudio = onAudio; this.page = null; this.browser = null; this.context = null;
     this.generation = 0; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
+    this.forwarding = false;
   }
   async launch() {
     if (!this.browser) this.browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ['--mute-audio'], args: [
@@ -21,6 +23,7 @@ export class NektoBrowser {
     ] });
   }
   async search(token) {
+    this.forwarding = false;
     const generation = ++this.generation;
     const previous = this.context;
     this.page = null; this.context = null; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
@@ -42,7 +45,7 @@ export class NektoBrowser {
       check();
       this.page = page;
       await page.exposeBinding('pushNektoAudio', ({ frame }, base64) => {
-        if (generation === this.generation && frame === page.mainFrame() &&
+        if (this.forwarding && generation === this.generation && frame === page.mainFrame() &&
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
       });
       await page.addInitScript(installBrowserRelay, { token, origin: new URL(NEKTO_URL).origin });
@@ -103,6 +106,33 @@ export class NektoBrowser {
       throw failure;
     }
   }
+  async next(token) {
+    const page = this.page;
+    if (!page || page.isClosed()) return this.search(token);
+    const generation = this.generation;
+    const check = () => {
+      if (generation !== this.generation || this.page !== page) throw new Error('Nekto search was stopped.');
+    };
+    this.forwarding = false;
+    try {
+      await advanceAudioCall(page, { check, authorize: async () => {
+        const identity = await page.evaluate(confirmAudioToken, { token, timeout: 3000 });
+        check(); this.authorizationDiagnostics = identity.diagnostics || null;
+        if (!identity.ok) throw authorizationError(identity.reason);
+      } });
+      return await this.finishSearch(page, token, check);
+    } catch (error) {
+      check();
+      this.callState = await page.evaluate(readAudioCallState);
+      check();
+      this.promptInfo = this.callState.attention ? await page.evaluate(readAudioPrompt) : null;
+      const failure = /^NEKTO_/.test(error.code || '') ? error : searchError('next-control');
+      this.lastFailure = { code: failure.code, message: failure.message };
+      console.warn(JSON.stringify({ event: 'nekto_next_failed', code: failure.code, ...this.callState }));
+      // Keep the native connection and any restriction visible. Never retry by re-registering.
+      throw failure;
+    }
+  }
   async finishSearch(page, token, check) {
     this.callState = await waitForAudioSearch(page, { check });
     if (this.callState.verification) throw authorizationError('verification-required');
@@ -118,7 +148,7 @@ export class NektoBrowser {
     check();
     this.authorizationDiagnostics = identity.diagnostics || null;
     if (!identity.ok) throw authorizationError(identity.reason);
-    this.promptInfo = null; this.lastFailure = null;
+    this.promptInfo = null; this.lastFailure = null; this.forwarding = true;
     return 'Searching on Nekto. Incoming audio will play here when someone connects.';
   }
   async status() {
@@ -131,6 +161,7 @@ export class NektoBrowser {
   }
   async stop() {
     this.generation++;
+    this.forwarding = false;
     const context = this.context;
     this.page = null; this.context = null;
     if (context) await context.close().catch(() => {});

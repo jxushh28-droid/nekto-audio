@@ -6,6 +6,8 @@ const failures = {
   confirm: ['NEKTO_SEARCH_UNCONFIRMED', 'Nekto did not confirm a search after starting. The token may be rejected or the site may need another step.'],
   attention: ['NEKTO_ATTENTION', 'Nekto is waiting for a response to a website prompt. Automatic search stopped.'],
   microphone: ['NEKTO_MICROPHONE', 'Nekto microphone permission or device initialization failed. Browser checks are shown in /status.'],
+  'next-control': ['NEKTO_NEXT_CONTROL', 'Nekto end-call control was not found or was ambiguous. The current browser session was kept; check /status.'],
+  'next-confirm': ['NEKTO_NEXT_UNCONFIRMED', 'Nekto did not confirm ending the previous call. The current browser session was kept; check /status.'],
 };
 
 export function searchError(stage) {
