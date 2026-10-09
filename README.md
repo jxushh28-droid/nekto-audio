@@ -19,6 +19,8 @@ This is an **incoming-only** relay. Nekto receives a silent microphone; your Dis
 
 Use `/token`, join a voice channel yourself, then use `/join`. Changing the token restarts search when you are in the bot's voice channel. Replies are ephemeral. `/status` shows the complete saved Nekto token only to the authorized requester; long tokens are attached in `nekto-token.txt` to fit Discord message limits. The bot never logs token values. Only the Discord application owner can control it unless `BOT_OWNER_IDS` is configured. The bot disconnects when the controlling user leaves or moves out of its voice channel.
 
+Token acceptance is preserved in status even after a failed browser closes. Native CAPTCHA and hCaptcha flags are refreshed at the failure boundary and whenever live status is requested. `before-start` means the check appeared before clicking Start; `after-start` means it was observed after that click. Runtime logs record these stages and boolean flags without tokens. This locates the failure; it does not establish why the website requested verification.
+
 ## Discord setup
 
 Invite the bot with `bot` and `applications.commands` scopes. Give it View Channel, Connect and Speak permissions. No privileged intents or message-content access are required. Global commands may take time to appear; set `DISCORD_GUILD_ID` to register guild commands immediately. The bot supports the DAVE encryption dependency included by `@discordjs/voice`.

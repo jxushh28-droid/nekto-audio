@@ -129,7 +129,7 @@ client.on(Events.InteractionCreate, async interaction => {
       case 'stop': await browser.stop(); queue.clear(); message = 'Nekto stopped.'; break;
       case 'leave': await leave(); message = 'Stopped Nekto and left voice.'; break;
       case 'status': {
-        const status = await browser.status();
+        const status = await browser.status(store.value);
         privateStatus = statusReply({ status, voice: session?.connection.state.status || 'disconnected', token: store.value, queue });
         break;
       }

@@ -5,6 +5,7 @@ import { audioClientReady, confirmAudioToken, authorizationError } from './live-
 import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
+import { observeAudioSession } from './session-observation.js';
 
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 
@@ -13,6 +14,7 @@ export class NektoBrowser {
     this.onAudio = onAudio; this.page = null; this.browser = null; this.context = null;
     this.generation = 0; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
     this.forwarding = false;
+    this.authorization = null; this.observedStage = null;
   }
   async launch() {
     if (!this.browser) this.browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ['--mute-audio'], args: [
@@ -27,6 +29,7 @@ export class NektoBrowser {
     const generation = ++this.generation;
     const previous = this.context;
     this.page = null; this.context = null; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
+    this.authorization = null; this.observedStage = null;
     const check = () => {
       if (generation !== this.generation) throw new Error('Nekto search was stopped.');
     };
@@ -71,10 +74,11 @@ export class NektoBrowser {
       this.authorizationDiagnostics = authorization.diagnostics || null;
       console.log(JSON.stringify({ event: 'nekto_audio_registration', result: authorization.reason, ...this.authorizationDiagnostics }));
       if (!authorization.ok) throw authorizationError(authorization.reason);
+      this.authorization = authorization.reason;
       check();
       await page.evaluate(reason => { window.__nektoRelay.authorization = reason; }, authorization.reason);
-      const initial = await page.evaluate(readAudioCallState);
-      if (initial.attention || initial.verification || initial.restricted) return await this.finishSearch(page, token, check);
+      const initial = await this.recordSessionState(page, token, 'before-start', check);
+      if (initial.attention || initial.verification || initial.restricted) return await this.finishSearch(page, token, check, 'before-start');
       stage = 'control';
       const button = page.locator('#searchCompanyBtn');
       await button.waitFor({ state: 'visible', timeout: 30000 });
@@ -92,7 +96,7 @@ export class NektoBrowser {
       stage = 'click';
       await button.click();
       stage = 'confirm';
-      return await this.finishSearch(page, token, check);
+      return await this.finishSearch(page, token, check, 'after-start');
     } catch (error) {
       const cancelled = generation !== this.generation;
       if (!cancelled) await this.stop();
@@ -120,10 +124,10 @@ export class NektoBrowser {
         check(); this.authorizationDiagnostics = identity.diagnostics || null;
         if (!identity.ok) throw authorizationError(identity.reason);
       } });
-      return await this.finishSearch(page, token, check);
+      return await this.finishSearch(page, token, check, 'next-confirmation');
     } catch (error) {
       check();
-      this.callState = await page.evaluate(readAudioCallState);
+      this.callState = await this.recordSessionState(page, token, 'next-failure', check);
       check();
       this.promptInfo = this.callState.attention ? await page.evaluate(readAudioPrompt) : null;
       const failure = /^NEKTO_/.test(error.code || '') ? error : searchError('next-control');
@@ -133,8 +137,15 @@ export class NektoBrowser {
       throw failure;
     }
   }
-  async finishSearch(page, token, check) {
+  async recordSessionState(page, token, stage, check) {
+    const observed = await observeAudioSession(page, token, { stage, check });
+    this.callState = observed.callState; this.authorizationDiagnostics = observed.authorizationDiagnostics; this.observedStage = stage;
+    console.log(JSON.stringify({ event: 'nekto_session_state', stage, ...this.callState, ...this.authorizationDiagnostics }));
+    return this.callState;
+  }
+  async finishSearch(page, token, check, stage = 'after-start') {
     this.callState = await waitForAudioSearch(page, { check });
+    await this.recordSessionState(page, token, stage, check);
     if (this.callState.verification) throw authorizationError('verification-required');
     if (this.callState.restricted) throw authorizationError('native-restriction');
     if (this.callState.attention) {
@@ -151,13 +162,17 @@ export class NektoBrowser {
     this.promptInfo = null; this.lastFailure = null; this.forwarding = true;
     return 'Searching on Nekto. Incoming audio will play here when someone connects.';
   }
-  async status() {
+  async status(token) {
     const page = this.page;
-    if (!page || page.isClosed()) return { active: false, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    if (!page || page.isClosed()) return { active: false, authorization: this.authorization, observedStage: this.observedStage, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
     this.callState = await page.evaluate(readAudioCallState);
+    if (token) {
+      const identity = await page.evaluate(confirmAudioToken, { token, timeout: 1 });
+      this.authorizationDiagnostics = identity.diagnostics || null;
+    }
     this.promptInfo = this.callState.attention ? await page.evaluate(readAudioPrompt) : null;
     const status = await page.evaluate(() => ({ active: true, ...window.__nektoRelay }));
-    return { ...status, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    return { ...status, authorization: this.authorization || status.authorization, observedStage: this.observedStage, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async stop() {
     this.generation++;

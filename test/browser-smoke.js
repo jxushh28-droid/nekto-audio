@@ -101,6 +101,15 @@ try {
     delete document.body.__vue__.$store.state.system.forceDisconnectReason;
     document.querySelectorAll('button').forEach(button => button.remove());
   });
+  relaySession.authorization = 'native-session-confirmed';
+  await page.evaluate(() => { document.body.__vue__.$store.state.system.hcaptchaRequired = true; });
+  await assert.rejects(relaySession.finishSearch(page, 'local-test-token', () => {}, 'after-start'),
+    error => error.code === 'NEKTO_VERIFICATION');
+  assert.equal(relaySession.authorizationDiagnostics.hcaptcha, true);
+  assert.equal(relaySession.authorizationDiagnostics.liveTokenMatches, true);
+  assert.equal(relaySession.observedStage, 'after-start');
+  assert.equal(relaySession.authorization, 'native-session-confirmed');
+  await page.evaluate(() => { delete document.body.__vue__.$store.state.system.hcaptchaRequired; });
   const connectLoopback = async (suppressTrackEvents = false) => {
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (mic.getAudioTracks().length !== 1) throw new Error('Silent microphone missing');
