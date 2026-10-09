@@ -32,6 +32,10 @@ export class NektoBrowser {
     return context;
   }
   async search(token) {
+    if (this.page && !this.page.isClosed()) return this.next(token, { endCurrentCall: false });
+    return this.openSession(token);
+  }
+  async openSession(token) {
     this.forwarding = false;
     const generation = ++this.generation;
     const previous = this.context;
@@ -101,7 +105,7 @@ export class NektoBrowser {
       if (!identity.ok) throw authorizationError(identity.reason);
       check();
       stage = 'click';
-      await button.click();
+      await button.click({ timeout: 5000 });
       stage = 'confirm';
       return await this.finishSearch(page, token, check, 'after-start');
     } catch (error) {
@@ -110,12 +114,16 @@ export class NektoBrowser {
         const page = this.page;
         if (page && !page.isClosed()) {
           await this.recordSessionState(page, token, `${stage}-failure`, check).catch(() => {});
-          this.controlDiagnostics = await inspectStartControls(page).catch(() => null);
+          this.controlDiagnostics = await inspectStartControls(page, { token }).catch(() => null);
           if (this.callState?.attention) this.promptInfo = await page.evaluate(readAudioPrompt).catch(() => null);
           console.warn(JSON.stringify({ event: 'nekto_start_failed', stage, errorType: error.name,
             ...this.controlDiagnostics }));
         }
-        await this.stop();
+        const keepSession = page && !page.isClosed() && (this.callState?.verification ||
+          this.callState?.restricted || this.callState?.attention || ['control', 'click', 'confirm'].includes(stage));
+        // Preserve the native page after a failed Start or website challenge.
+        // Retrying /join must not create another registration or erase evidence.
+        if (!keepSession) await this.stop();
       }
       else {
         await context?.close().catch(() => {});
@@ -130,7 +138,7 @@ export class NektoBrowser {
       throw failure;
     }
   }
-  async next(token) {
+  async next(token, { endCurrentCall = true } = {}) {
     const page = this.page;
     if (!page || page.isClosed()) return this.search(token);
     const generation = this.generation;
@@ -139,21 +147,22 @@ export class NektoBrowser {
     };
     this.forwarding = false;
     try {
-      await advanceAudioCall(page, { check, authorize: async () => {
+      await advanceAudioCall(page, { check, endCurrentCall, authorize: async () => {
         const identity = await page.evaluate(confirmAudioToken, { token, timeout: 3000 });
         check(); this.authorizationDiagnostics = identity.diagnostics || null;
         if (!identity.ok) throw authorizationError(identity.reason);
       } });
-      return await this.finishSearch(page, token, check, 'next-confirmation');
+      return await this.finishSearch(page, token, check, endCurrentCall ? 'next-confirmation' : 'resume-confirmation');
     } catch (error) {
       check();
-      this.callState = await this.recordSessionState(page, token, 'next-failure', check);
-      this.controlDiagnostics = await inspectStartControls(page);
+      await this.recordSessionState(page, token, 'next-failure', check).catch(() => {});
+      this.controlDiagnostics = await inspectStartControls(page, { token }).catch(() => null);
       check();
-      this.promptInfo = this.callState.attention ? await page.evaluate(readAudioPrompt) : null;
+      this.promptInfo = this.callState?.attention ? await page.evaluate(readAudioPrompt).catch(() => null) : null;
       const failure = /^NEKTO_/.test(error.code || '') ? error : searchError('next-control');
       this.lastFailure = { code: failure.code, message: failure.message };
-      console.warn(JSON.stringify({ event: 'nekto_next_failed', code: failure.code, ...this.callState }));
+      console.warn(JSON.stringify({ event: endCurrentCall ? 'nekto_next_failed' : 'nekto_resume_failed',
+        code: failure.code, ...this.callState, ...this.controlDiagnostics }));
       // Keep the native connection and any restriction visible. Never retry by re-registering.
       throw failure;
     }
@@ -180,8 +189,15 @@ export class NektoBrowser {
     check();
     this.authorizationDiagnostics = identity.diagnostics || null;
     if (!identity.ok) throw authorizationError(identity.reason);
+    const captureError = await page.evaluate(() => window.__nektoRelay?.error);
+    check();
+    if (captureError) throw Object.assign(new Error(captureError), { code: 'NEKTO_CAPTURE' });
     this.promptInfo = null; this.lastFailure = null; this.forwarding = true;
-    return 'Searching on Nekto. Incoming audio will play here when someone connects.';
+    this.authorization = identity.reason;
+    this.controlDiagnostics = null;
+    return this.callState.partnerConnected
+      ? 'Connected to a Nekto partner. Incoming audio is relayed to this voice channel.'
+      : 'Searching on Nekto. Incoming audio will play here when someone connects.';
   }
   async status(token) {
     const page = this.page;
@@ -193,6 +209,11 @@ export class NektoBrowser {
     }
     this.promptInfo = this.callState.attention ? await page.evaluate(readAudioPrompt) : null;
     const status = await page.evaluate(() => ({ active: true, ...window.__nektoRelay }));
+    console.log(JSON.stringify({ event: 'nekto_audio_status', ...this.callState,
+      browserFrames: status.frames || 0, peers: status.peers || 0, peerStates: status.peerStates || [],
+      iceStates: status.iceStates || [], trackEvents: status.trackEvents || 0, capturedTracks: status.tracks || 0,
+      inboundPackets: status.inboundPackets || 0, inboundBytes: status.inboundBytes || 0,
+      audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
     return { ...status, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async stop() {

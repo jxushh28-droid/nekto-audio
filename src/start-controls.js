@@ -1,16 +1,6 @@
 import { readAudioCallState, assertCallAvailable } from './call-state.js';
 import { searchError } from './search-error.js';
-
-const startName = /^(?:Начать(?: новый)?(?: разговор| беседу| общение| поиск)?|Новый (?:разговор|собеседник)|Start(?: (?:a )?(?:new )?(?:call|conversation|search))?|New conversation)\s*$/i;
-
-async function usable(locator) {
-  const matches = [];
-  for (let i = 0; i < await locator.count(); i++) {
-    const candidate = locator.nth(i);
-    if (await candidate.isVisible() && await candidate.isEnabled()) matches.push(candidate);
-  }
-  return matches;
-}
+import { startName, usableControls, labelledCallControls, readNativeControls } from './native-controls.js';
 
 export async function waitForStartControl(page, { check = () => {}, timeout = 30000, interval = 250 } = {}) {
   const deadline = Date.now() + timeout;
@@ -19,8 +9,8 @@ export async function waitForStartControl(page, { check = () => {}, timeout = 30
     const state = await page.evaluate(readAudioCallState);
     check(); assertCallAvailable(state);
     if (state.searching || state.partnerConnected) return { state, button: null };
-    let matches = await usable(page.locator('#searchCompanyBtn'));
-    if (!matches.length) matches = await usable(page.getByRole('button', { name: startName }));
+    let matches = await usableControls(page.locator('#searchCompanyBtn'));
+    if (!matches.length) matches = await labelledCallControls(page, startName);
     check();
     if (matches.length > 1) throw searchError('control-ambiguous');
     if (matches.length === 1) return { state, button: matches[0] };
@@ -29,7 +19,7 @@ export async function waitForStartControl(page, { check = () => {}, timeout = 30
   throw searchError('control');
 }
 
-export async function inspectStartControls(page) {
+export async function inspectStartControls(page, { token = '' } = {}) {
   const result = {};
   for (const [prefix, locator] of [['start', page.locator('#searchCompanyBtn')],
     ['cookies', page.locator('#acceptCookies')]]) {
@@ -40,5 +30,6 @@ export async function inspectStartControls(page) {
     }
     result[`${prefix}Matches`] = count; result[`${prefix}Visible`] = visible; result[`${prefix}Enabled`] = enabled;
   }
+  result.visibleControls = await page.evaluate(readNativeControls, { token });
   return result;
 }

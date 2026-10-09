@@ -10,7 +10,7 @@ import { audioClientReady, confirmAudioToken } from '../src/live-session.js';
 import { readAudioPrompt } from '../src/audio-prompt.js';
 import { NektoBrowser } from '../src/nekto.js';
 import { writeTokenExtension, extensionBrowserOptions } from '../src/token-extension.js';
-import { waitForStartControl } from '../src/start-controls.js';
+import { waitForStartControl, inspectStartControls } from '../src/start-controls.js';
 
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
@@ -95,17 +95,20 @@ try {
     store.state.chat = { activeConnectionId: 1 };
     window.nativeStarts = 0; window.nativeEnds = 0;
     const end = document.createElement('button'); end.textContent = 'Завершить разговор';
-    const start = document.createElement('button'); start.id = 'searchCompanyBtn'; start.textContent = 'Начать'; start.hidden = true;
+    const start = document.createElement('a'); start.href = '#/'; start.textContent = 'Әңгімелесушіні іздеу'; start.hidden = true;
     end.onclick = () => {
       window.nativeEnds++;
       const modal = document.createElement('div'); modal.className = 'swal2-popup';
       modal.textContent = 'Вы уверены, что хотите завершить разговор?';
       const yes = document.createElement('button'); yes.textContent = 'Да';
-      yes.onclick = () => { store.state.chat.activeConnectionId = null; modal.remove(); end.hidden = true; start.hidden = false; };
+      yes.onclick = () => {
+        store.state.chat.activeConnectionId = null;
+        setTimeout(() => { modal.remove(); end.hidden = true; start.hidden = false; }, 100);
+      };
       modal.append(yes); document.body.append(modal);
     };
-    start.onclick = () => { window.nativeStarts++; store.state.user.isSearching = true; start.hidden = true; };
-    const hiddenStart = start.cloneNode(true); hiddenStart.hidden = true;
+    start.onclick = event => { event.preventDefault(); window.nativeStarts++; store.state.user.isSearching = true; start.hidden = true; };
+    const hiddenStart = document.createElement('button'); hiddenStart.id = 'searchCompanyBtn'; hiddenStart.hidden = true;
     const hiddenCookies = document.createElement('button'); hiddenCookies.id = 'acceptCookies'; hiddenCookies.hidden = true;
     const cookies = document.createElement('button'); cookies.id = 'acceptCookies'; cookies.textContent = 'Accept cookies';
     window.nativeCookies = 0; cookies.onclick = () => { window.nativeCookies++; cookies.remove(); };
@@ -116,17 +119,47 @@ try {
   relaySession.page = page;
   relaySession.context = { close() { throw Error('Unexpected context close'); } };
   relaySession.browser = { newContext() { throw Error('Unexpected new registration'); } };
+  assert.match(await relaySession.search('local-test-token'), /^Connected to a Nekto partner/);
+  assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [0, 0], 'Repeated join interrupted the partner');
   await relaySession.next('local-test-token');
   await relaySession.next('local-test-token'); // Already searching: do not click Start again.
   assert.equal(relaySession.page, page); assert.equal(relaySession.forwarding, true);
   assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [1, 1]);
   assert.equal(await page.evaluate(() => window.nativeCookies), 0, 'Search unexpectedly accepted cookies');
+  await page.evaluate(() => {
+    const store = document.body.__vue__.$store;
+    store.state.user.isSearching = false; store.state.chat.activeConnectionId = 2;
+    document.querySelectorAll('button:not(#acceptCookies), a').forEach(control => control.remove());
+    const end = document.createElement('a'); end.href = '#/'; end.textContent = 'Әңгімені аяқтау';
+    const start = document.createElement('span'); start.className = 'btn'; start.innerHTML = ' <span>Начать</span>\n<span>новую беседу</span> '; start.hidden = true;
+    end.onclick = event => {
+      event.preventDefault(); window.nativeEnds++;
+      const modal = document.createElement('div'); modal.className = 'swal2-popup';
+      modal.textContent = 'Сіз әңгімені аяқтағыңыз келетініне сенімдісіз бе?';
+      const yes = document.createElement('button'); yes.textContent = 'Иә';
+      yes.onclick = () => {
+        store.state.chat.activeConnectionId = null;
+        setTimeout(() => { modal.remove(); end.hidden = true; start.hidden = false; }, 100);
+      };
+      modal.append(yes); document.body.append(modal);
+    };
+    start.onclick = () => { window.nativeStarts++; store.state.user.isSearching = true; start.hidden = true; };
+    document.body.append(end, start);
+  });
+  assert.match(await relaySession.search('local-test-token'), /^Connected to a Nekto partner/);
+  assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [1, 1]);
+  await relaySession.next('local-test-token');
+  assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [2, 2]);
+  await relaySession.search('local-test-token');
+  await relaySession.next('local-test-token');
+  assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [2, 2], 'Existing search was restarted');
+  assert.equal(await page.evaluate(() => window.nativeCookies), 0);
   await page.evaluate(() => { document.body.__vue__.$store.state.system.forceDisconnectReason = 7; });
   await assert.rejects(relaySession.next('local-test-token'), error => error.code === 'NEKTO_RESTRICTED');
   assert.equal(relaySession.page, page); assert.equal(relaySession.forwarding, false);
   await page.evaluate(() => {
     delete document.body.__vue__.$store.state.system.forceDisconnectReason;
-    document.querySelectorAll('button').forEach(button => button.remove());
+    document.querySelectorAll('button, a, .btn').forEach(control => control.remove());
   });
   relaySession.authorization = 'native-session-confirmed';
   await page.evaluate(() => { document.body.__vue__.$store.state.system.hcaptchaRequired = true; });
@@ -145,7 +178,16 @@ try {
   });
   const alternateStart = await waitForStartControl(page);
   await alternateStart.button.click();
-  assert.equal(await page.evaluate(() => window.nativeStarts), 2);
+  assert.equal(await page.evaluate(() => window.nativeStarts), 3);
+  await page.evaluate(() => {
+    const diagnostic = document.createElement('button'); diagnostic.id = 'fixture-diagnostic';
+    diagnostic.textContent = 'local-test-token 00000000-0000-4000-8000-000000000000';
+    document.body.append(diagnostic);
+  });
+  const controls = await inspectStartControls(page, { token: 'local-test-token' });
+  assert(controls.visibleControls.some(control => control.id === 'fixture-diagnostic'));
+  assert(!JSON.stringify(controls).includes('local-test-token'));
+  assert(!JSON.stringify(controls).includes('00000000-0000-4000-8000-000000000000'));
   await page.evaluate(() => { document.querySelectorAll('button').forEach(button => button.remove()); });
   const connectLoopback = async (suppressTrackEvents = false) => {
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -245,7 +287,7 @@ try {
   const replaced = await context.newPage(); await replaced.goto(origin);
   assert.equal(await replaced.evaluate(() => window.tokenAtFirstScript), 'replacement-test-token');
   assert.equal(await replaced.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).settings.theme), 'fixture-theme');
-  console.log('Browser integration passed: real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; native next; restriction diagnostics; microphone; WebRTC PCM; missed track recovery; cleanup.');
+  console.log('Browser integration passed: real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; repeated join; two native next calls with Kazakh links and styled Russian controls; fading confirmation; cookie controls untouched; private diagnostics; restrictions; microphone; WebRTC PCM; missed track recovery; cleanup.');
 } finally {
   await context?.close();
   await new Promise(resolve => server.close(resolve));

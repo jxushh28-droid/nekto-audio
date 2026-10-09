@@ -54,6 +54,11 @@ async function join(interaction) {
   if (!permissions?.has([PermissionFlagsBits.Connect, PermissionFlagsBits.Speak])) {
     throw new Error('Give the bot Connect and Speak permissions in your voice channel.');
   }
+  if (session?.guildId === interaction.guildId && session.channelId === channel.id &&
+      session.userId === interaction.user.id && session.connection.state.status === VoiceConnectionStatus.Ready &&
+      session.player.state.status === AudioPlayerStatus.Playing) {
+    return browser.search(store.value);
+  }
   await leave();
   const connection = joinVoiceChannel({
     channelId: channel.id, guildId: interaction.guild.id,
@@ -130,6 +135,8 @@ client.on(Events.InteractionCreate, async interaction => {
       case 'leave': await leave(); message = 'Stopped Nekto and left voice.'; break;
       case 'status': {
         const status = await browser.status(store.value);
+        console.log(JSON.stringify({ event: 'discord_audio_status', voice: session?.connection.state.status || 'disconnected',
+          framesReceived: queue.received, nonSilentFrames: queue.nonSilent }));
         privateStatus = statusReply({ status, voice: session?.connection.state.status || 'disconnected', token: store.value, queue });
         break;
       }

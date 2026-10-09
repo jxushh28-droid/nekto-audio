@@ -1,7 +1,7 @@
 const failures = {
   load: ['NEKTO_PAGE_LOAD', 'Nekto page could not load from Railway. The site may be unavailable or rejecting connections.'],
   authorize: ['NEKTO_AUTH_FAILED', 'Nekto live token authorization failed.'],
-  control: ['NEKTO_START_CONTROL', 'Nekto start control was not found. The site may still be loading, require verification, or use different controls.'],
+  control: ['NEKTO_START_CONTROL', 'Nekto has no available Start action after waiting for the page. The browser session was kept; check /status.'],
   'control-ambiguous': ['NEKTO_START_AMBIGUOUS', 'Nekto has multiple visible start controls. No button was clicked; check /status.'],
   click: ['NEKTO_START_CLICK', 'Nekto start control could not be activated.'],
   confirm: ['NEKTO_SEARCH_UNCONFIRMED', 'Nekto did not confirm a search after starting. The token may be rejected or the site may need another step.'],
