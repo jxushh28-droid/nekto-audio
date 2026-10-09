@@ -17,10 +17,7 @@ function fixture(initial, { confirmation = false, unrelatedPrompt = false, missi
     locator: selector => selector === '.swal2-popup' ? {
       innerText: async () => unrelatedPrompt ? 'Verify you are human' : 'Вы уверены, что хотите завершить разговор?',
       getByRole: () => buttons(true, async () => { confirmations++; state.attention = false; state.partnerConnected = false; }),
-    } : {
-      isVisible: async () => true,
-      click: async () => { started++; state.searching = true; },
-    },
+    } : buttons(true, async () => { started++; state.searching = true; }),
   };
   return { page, options: { authorize: async () => { authorized++; }, timeout: 5, interval: 1 },
     counts: () => ({ authorized, ended, started, confirmations }) };

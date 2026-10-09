@@ -10,6 +10,7 @@ import { audioClientReady, confirmAudioToken } from '../src/live-session.js';
 import { readAudioPrompt } from '../src/audio-prompt.js';
 import { NektoBrowser } from '../src/nekto.js';
 import { writeTokenExtension, extensionBrowserOptions } from '../src/token-extension.js';
+import { acceptCookieConsent, waitForStartControl } from '../src/start-controls.js';
 
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
@@ -104,8 +105,15 @@ try {
       modal.append(yes); document.body.append(modal);
     };
     start.onclick = () => { window.nativeStarts++; store.state.user.isSearching = true; start.hidden = true; };
+    const hiddenStart = start.cloneNode(true); hiddenStart.hidden = true;
+    const hiddenCookies = document.createElement('button'); hiddenCookies.id = 'acceptCookies'; hiddenCookies.hidden = true;
+    const cookies = document.createElement('button'); cookies.id = 'acceptCookies'; cookies.textContent = 'Accept cookies';
+    window.nativeCookies = 0; cookies.onclick = () => { window.nativeCookies++; cookies.remove(); };
+    document.body.append(hiddenStart, hiddenCookies, cookies);
     document.body.append(end, start);
   });
+  await acceptCookieConsent(page);
+  assert.equal(await page.evaluate(() => window.nativeCookies), 1);
   const relaySession = new NektoBrowser(() => {});
   relaySession.page = page;
   relaySession.context = { close() { throw Error('Unexpected context close'); } };
@@ -130,6 +138,16 @@ try {
   assert.equal(relaySession.observedStage, 'after-start');
   assert.equal(relaySession.authorization, 'native-session-confirmed');
   await page.evaluate(() => { delete document.body.__vue__.$store.state.system.hcaptchaRequired; });
+  await page.evaluate(() => {
+    document.body.__vue__.$store.state.user.isSearching = false;
+    const missingId = document.createElement('button'); missingId.textContent = 'Начать разговор';
+    missingId.onclick = () => { document.body.__vue__.$store.state.user.isSearching = true; window.nativeStarts++; };
+    document.body.append(missingId);
+  });
+  const alternateStart = await waitForStartControl(page);
+  await alternateStart.button.click();
+  assert.equal(await page.evaluate(() => window.nativeStarts), 2);
+  await page.evaluate(() => { document.querySelectorAll('button').forEach(button => button.remove()); });
   const connectLoopback = async (suppressTrackEvents = false) => {
     const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (mic.getAudioTracks().length !== 1) throw new Error('Silent microphone missing');

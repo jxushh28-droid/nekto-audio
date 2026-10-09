@@ -1,18 +1,24 @@
 import { searchError } from './search-error.js';
+import { authorizationError } from './live-session.js';
+
+export function assertCallAvailable(state) {
+  if (state.verification) throw authorizationError('verification-required');
+  if (state.restricted) throw authorizationError('native-restriction');
+  if (state.attention) throw searchError('attention');
+}
 
 // Serialized into the audio page. No partner identities or chat content leave it.
 export function readAudioCallState() {
   const store = Array.from(document.querySelectorAll('*')).map(el => el.__vue__?.$store)
     .find(store => store?.state?.user && store.state.system);
   const state = store?.state;
-  const visible = selector => {
-    const el = document.querySelector(selector);
+  const visible = selector => Array.from(document.querySelectorAll(selector)).some(el => {
     if (!el?.isConnected) return false;
     if (el.checkVisibility) return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
     const style = getComputedStyle(el);
     return !!(el.getClientRects().length && style.display !== 'none' && style.opacity !== '0' &&
       !['hidden', 'collapse'].includes(style.visibility));
-  };
+  });
   const verification = !!(state?.system.captchaRequired || state?.system.hcaptchaRequired);
   const restricted = !!state?.system.forceDisconnectReason || visible('#mask_bad') || visible('#mask_bad_inet') || visible('.swal2-popup.banPopup');
   const attention = visible('.swal2-popup');

@@ -6,8 +6,8 @@ import { readAudioCallState, waitForAudioSearch } from '../src/call-state.js';
 function read({ user = {}, chat = {}, system = {}, visible = [], hash = '#/' } = {}) {
   return vm.runInNewContext(`(${readAudioCallState.toString()})()`, {
     document: {
-      querySelectorAll: () => [{ __vue__: { $store: { state: { user, chat, system: { isAuth: true, socketConnected: true, ...system } } } } }],
-      querySelector: selector => visible.includes(selector) ? { isConnected: true, getClientRects: () => [1] } : null,
+      querySelectorAll: selector => selector === '*' ? [{ __vue__: { $store: { state: { user, chat, system: { isAuth: true, socketConnected: true, ...system } } } } }]
+        : visible.includes(selector) ? [{ isConnected: true, getClientRects: () => [1] }] : [],
     }, location: { hash }, getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
   });
 }

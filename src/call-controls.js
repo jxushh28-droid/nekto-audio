@@ -1,6 +1,6 @@
-import { readAudioCallState, waitForAudioSearch } from './call-state.js';
-import { authorizationError } from './live-session.js';
+import { readAudioCallState, waitForAudioSearch, assertCallAvailable } from './call-state.js';
 import { searchError } from './search-error.js';
+import { waitForStartControl } from './start-controls.js';
 
 // Use only visible, enabled controls with an explicit call-related label.
 // An unknown layout fails in place instead of opening another registration.
@@ -14,12 +14,6 @@ async function control(page, name, scope = page, optional = false) {
   if (!matches.length && optional) return null;
   if (matches.length !== 1) throw searchError('next-control');
   return matches[0];
-}
-
-export function assertCallAvailable(state) {
-  if (state.verification) throw authorizationError('verification-required');
-  if (state.restricted) throw authorizationError('native-restriction');
-  if (state.attention) throw searchError('attention');
 }
 
 export async function advanceAudioCall(page, { check = () => {}, authorize, timeout = 15000, interval = 250 } = {}) {
@@ -55,20 +49,8 @@ export async function advanceAudioCall(page, { check = () => {}, authorize, time
   }
   check(); assertCallAvailable(state);
   if (state.searching) return state; // Native End may already have started the next search.
-  let start;
-  const deadline = Date.now() + timeout;
-  do {
-    state = await page.evaluate(readAudioCallState);
-    check(); assertCallAvailable(state);
-    if (state.searching || state.partnerConnected) return state;
-    const primary = page.locator('#searchCompanyBtn');
-    start = await primary.isVisible() ? primary : await control(page,
-      /^(?:Начать(?: новый)? (?:разговор|беседу)|Новый (?:разговор|собеседник)|Start (?:a )?(?:new )?(?:call|conversation)|New conversation)\s*$/i, page, true);
-    check();
-    if (start) break;
-    await new Promise(resolve => setTimeout(resolve, interval));
-  } while (Date.now() < deadline);
-  if (!start) throw searchError('next-control');
+  const { button: start, state: observed } = await waitForStartControl(page, { check, timeout, interval });
+  if (!start) return observed;
   await authorize(); check();
   await start.click({ timeout: 5000 });
   return waitForAudioSearch(page, { check, timeout, interval });

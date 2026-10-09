@@ -9,6 +9,7 @@ import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
 import { writeTokenExtension, extensionBrowserOptions } from './token-extension.js';
+import { acceptCookieConsent, waitForStartControl, inspectStartControls } from './start-controls.js';
 
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 
@@ -18,6 +19,7 @@ export class NektoBrowser {
     this.generation = 0; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
     this.forwarding = false;
     this.authorization = null; this.observedStage = null;
+    this.controlDiagnostics = null;
     this.profilePath = resolve(directory, 'nekto-browser');
     this.extensionPath = resolve(directory, 'nekto-prime');
   }
@@ -35,6 +37,7 @@ export class NektoBrowser {
     const previous = this.context;
     this.page = null; this.context = null; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
     this.authorization = null; this.observedStage = null;
+    this.controlDiagnostics = null;
     const check = () => {
       if (generation !== this.generation) throw new Error('Nekto search was stopped.');
     };
@@ -83,13 +86,15 @@ export class NektoBrowser {
       await page.evaluate(reason => { window.__nektoRelay.authorization = reason; }, authorization.reason);
       const initial = await this.recordSessionState(page, token, 'before-start', check);
       if (initial.attention || initial.verification || initial.restricted) return await this.finishSearch(page, token, check, 'before-start');
+      stage = 'cookies';
+      await acceptCookieConsent(page, { check });
       stage = 'control';
-      const button = page.locator('#searchCompanyBtn');
-      await button.waitFor({ state: 'visible', timeout: 30000 });
-      const cookies = page.locator('#acceptCookies');
-      if (await cookies.isVisible() && await cookies.isEnabled()) await cookies.click({ timeout: 3000 });
-      const blocked = await page.getByText(/verify you are human|checking your browser|unusual traffic/i).count();
-      if (blocked) throw new Error('Nekto is asking for browser verification. Automatic search stopped.');
+      const { button } = await waitForStartControl(page, { check });
+      if (!button) return await this.finishSearch(page, token, check, 'already-searching');
+      const verificationText = page.getByText(/verify you are human|checking your browser|unusual traffic/i);
+      for (let i = 0; i < await verificationText.count(); i++) {
+        if (await verificationText.nth(i).isVisible()) throw authorizationError('verification-required');
+      }
       const captureError = await page.evaluate(() => window.__nektoRelay?.error);
       if (captureError) throw new Error(captureError);
       const identity = await page.evaluate(confirmAudioToken, { token, timeout: 3000 });
@@ -103,7 +108,17 @@ export class NektoBrowser {
       return await this.finishSearch(page, token, check, 'after-start');
     } catch (error) {
       const cancelled = generation !== this.generation;
-      if (!cancelled) await this.stop();
+      if (!cancelled) {
+        const page = this.page;
+        if (page && !page.isClosed()) {
+          await this.recordSessionState(page, token, `${stage}-failure`, check).catch(() => {});
+          this.controlDiagnostics = await inspectStartControls(page).catch(() => null);
+          if (this.callState?.attention) this.promptInfo = await page.evaluate(readAudioPrompt).catch(() => null);
+          console.warn(JSON.stringify({ event: 'nekto_start_failed', stage, errorType: error.name,
+            ...this.controlDiagnostics }));
+        }
+        await this.stop();
+      }
       else {
         await context?.close().catch(() => {});
         if (this.context === context) { this.page = null; this.context = null; this.browser = null; }
@@ -111,7 +126,7 @@ export class NektoBrowser {
       if (cancelled) throw new Error('Nekto search was stopped.');
       const known = ['Nekto is asking for browser verification. Automatic search stopped.',
         'Audio capture initialization failed.', 'Remote audio capture failed.'];
-      const failure = known.includes(error.message) || /^NEKTO_(VUEX_|AUTH_|TOKEN_|VERIFICATION$|REGISTRATION$|RESTRICTED$|ATTENTION$|MICROPHONE$|SEARCH_)/.test(error.code || '')
+      const failure = known.includes(error.message) || /^NEKTO_/.test(error.code || '')
         ? error : searchError(stage);
       this.lastFailure = { code: failure.code || 'NEKTO_CAPTURE_OR_VERIFICATION', message: failure.message };
       throw failure;
@@ -135,6 +150,7 @@ export class NektoBrowser {
     } catch (error) {
       check();
       this.callState = await this.recordSessionState(page, token, 'next-failure', check);
+      this.controlDiagnostics = await inspectStartControls(page);
       check();
       this.promptInfo = this.callState.attention ? await page.evaluate(readAudioPrompt) : null;
       const failure = /^NEKTO_/.test(error.code || '') ? error : searchError('next-control');
@@ -171,7 +187,7 @@ export class NektoBrowser {
   }
   async status(token) {
     const page = this.page;
-    if (!page || page.isClosed()) return { active: false, authorization: this.authorization, observedStage: this.observedStage, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    if (!page || page.isClosed()) return { active: false, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
     this.callState = await page.evaluate(readAudioCallState);
     if (token) {
       const identity = await page.evaluate(confirmAudioToken, { token, timeout: 1 });
@@ -179,7 +195,7 @@ export class NektoBrowser {
     }
     this.promptInfo = this.callState.attention ? await page.evaluate(readAudioPrompt) : null;
     const status = await page.evaluate(() => ({ active: true, ...window.__nektoRelay }));
-    return { ...status, authorization: this.authorization || status.authorization, observedStage: this.observedStage, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    return { ...status, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async stop() {
     this.generation++;

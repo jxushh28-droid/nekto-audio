@@ -23,6 +23,8 @@ Use `/token`, join a voice channel yourself, then use `/join`. Changing the toke
 
 Token acceptance is preserved in status even after a failed browser closes. Native CAPTCHA and hCaptcha flags are refreshed at the failure boundary and whenever live status is requested. `before-start` means the check appeared before clicking Start; `after-start` means it was observed after that click. Runtime logs record these stages and boolean flags without tokens. This locates the failure; it does not establish why the website requested verification.
 
+Start and cookie-consent lookups ignore hidden copies of controls and require a single visible, enabled match. Start also supports an unambiguous button labelled with its normal call/search action. Cookie-consent failures have their own `NEKTO_COOKIE_CONSENT` code; unavailable or ambiguous Start controls and failed clicks have separate codes. Failure status preserves current native state and control counts so unrelated failures are not reported as a missing Start button.
+
 ## Discord setup
 
 Invite the bot with `bot` and `applications.commands` scopes. Give it View Channel, Connect and Speak permissions. No privileged intents or message-content access are required. Global commands may take time to appear; set `DISCORD_GUILD_ID` to register guild commands immediately. The bot supports the DAVE encryption dependency included by `@discordjs/voice`.
