@@ -9,7 +9,7 @@ import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
 import { writeTokenExtension, extensionBrowserOptions } from './token-extension.js';
-import { acceptCookieConsent, waitForStartControl, inspectStartControls } from './start-controls.js';
+import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 
@@ -86,8 +86,6 @@ export class NektoBrowser {
       await page.evaluate(reason => { window.__nektoRelay.authorization = reason; }, authorization.reason);
       const initial = await this.recordSessionState(page, token, 'before-start', check);
       if (initial.attention || initial.verification || initial.restricted) return await this.finishSearch(page, token, check, 'before-start');
-      stage = 'cookies';
-      await acceptCookieConsent(page, { check });
       stage = 'control';
       const { button } = await waitForStartControl(page, { check });
       if (!button) return await this.finishSearch(page, token, check, 'already-searching');

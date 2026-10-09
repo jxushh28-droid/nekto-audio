@@ -10,7 +10,7 @@ import { audioClientReady, confirmAudioToken } from '../src/live-session.js';
 import { readAudioPrompt } from '../src/audio-prompt.js';
 import { NektoBrowser } from '../src/nekto.js';
 import { writeTokenExtension, extensionBrowserOptions } from '../src/token-extension.js';
-import { acceptCookieConsent, waitForStartControl } from '../src/start-controls.js';
+import { waitForStartControl } from '../src/start-controls.js';
 
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
@@ -112,8 +112,6 @@ try {
     document.body.append(hiddenStart, hiddenCookies, cookies);
     document.body.append(end, start);
   });
-  await acceptCookieConsent(page);
-  assert.equal(await page.evaluate(() => window.nativeCookies), 1);
   const relaySession = new NektoBrowser(() => {});
   relaySession.page = page;
   relaySession.context = { close() { throw Error('Unexpected context close'); } };
@@ -122,6 +120,7 @@ try {
   await relaySession.next('local-test-token'); // Already searching: do not click Start again.
   assert.equal(relaySession.page, page); assert.equal(relaySession.forwarding, true);
   assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [1, 1]);
+  assert.equal(await page.evaluate(() => window.nativeCookies), 0, 'Search unexpectedly accepted cookies');
   await page.evaluate(() => { document.body.__vue__.$store.state.system.forceDisconnectReason = 7; });
   await assert.rejects(relaySession.next('local-test-token'), error => error.code === 'NEKTO_RESTRICTED');
   assert.equal(relaySession.page, page); assert.equal(relaySession.forwarding, false);

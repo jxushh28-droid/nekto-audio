@@ -12,16 +12,6 @@ async function usable(locator) {
   return matches;
 }
 
-export async function acceptCookieConsent(page, { check = () => {} } = {}) {
-  const matches = await usable(page.locator('#acceptCookies'));
-  check();
-  if (!matches.length) return;
-  if (matches.length > 1) throw searchError('cookies');
-  try { await matches[0].click({ timeout: 5000 }); }
-  catch { check(); throw searchError('cookies'); }
-  check();
-}
-
 export async function waitForStartControl(page, { check = () => {}, timeout = 30000, interval = 250 } = {}) {
   const deadline = Date.now() + timeout;
   do {

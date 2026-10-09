@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { acceptCookieConsent, waitForStartControl, inspectStartControls } from '../src/start-controls.js';
+import { waitForStartControl, inspectStartControls } from '../src/start-controls.js';
 
 const ready = { verification: false, restricted: false, attention: false, searching: false, partnerConnected: false };
 const collection = items => ({ count: async () => items.length, nth: i => ({
@@ -33,12 +33,11 @@ test('active search, verification, and ambiguous controls do not produce another
     error => error.code === 'NEKTO_START_AMBIGUOUS');
 });
 
-test('cookie consent ignores hidden duplicates and identifies blocked cookie clicks accurately', async () => {
-  let clicked = 0;
-  await acceptCookieConsent(fixture({ cookies: [{ visible: false }, { click: async () => clicked++ }] }));
-  assert.equal(clicked, 1);
-  await assert.rejects(acceptCookieConsent(fixture({ cookies: [{ click: async () => { throw Error('blocked'); } }] })),
-    error => error.code === 'NEKTO_COOKIE_CONSENT');
-  await assert.rejects(acceptCookieConsent(fixture({ cookies: [{}, {}] })),
-    error => error.code === 'NEKTO_COOKIE_CONSENT');
+test('Start proceeds without interacting with cookie-consent controls', async () => {
+  let cookiesClicked = 0, starts = 0;
+  const cookie = { click: async () => { cookiesClicked++; throw Error('blocked optional cookie control'); } };
+  const page = fixture({ start: [{ click: async () => starts++ }], cookies: [cookie, cookie] });
+  const found = await waitForStartControl(page);
+  await found.button.click();
+  assert.equal(starts, 1); assert.equal(cookiesClicked, 0);
 });
