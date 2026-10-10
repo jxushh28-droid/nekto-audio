@@ -20,6 +20,13 @@ let session = null;
 let ownerIds = new Set();
 const queue = new PcmQueue();
 const browser = new NektoBrowser(base64 => { if (session) queue.accept(base64); });
+const startupCategory = error => {
+  const message = String(error?.message || '');
+  if (/ProcessSingleton|SingletonLock|profile appears to be in use|profile.*locked/i.test(message)) return 'browser-profile-locked';
+  if (/Executable doesn.t exist|browser.*executable.*not.*found/i.test(message)) return 'browser-executable-missing';
+  if (/EACCES|permission denied/i.test(message)) return 'filesystem-permission';
+  return 'unclassified';
+};
 const safeError = error => String(error?.code || error?.name || 'Error').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
 
 const commands = [
@@ -179,9 +186,12 @@ async function shutdown() {
 process.on('SIGTERM', () => void shutdown());
 process.on('SIGINT', () => void shutdown());
 
+let startupStage = 'configuration';
 try {
   if (!process.env.DISCORD_TOKEN) throw new Error('DISCORD_TOKEN is required.');
+  startupStage = 'token-store';
   await store.load();
+  startupStage = 'browser';
   await browser.launch(store.value); // Verify Chromium with the extension before reporting healthy.
   client.once(Events.ClientReady, async () => {
     try {
@@ -207,9 +217,10 @@ try {
       await shutdown(); process.exitCode = 1;
     }
   });
+  startupStage = 'discord-login';
   await client.login(process.env.DISCORD_TOKEN);
 } catch (error) {
-  console.error(`Bot startup failed (${safeError(error)}). Check DISCORD_TOKEN and the browser installation.`);
+  console.error(JSON.stringify({ event: 'bot_startup_failed', stage: startupStage, category: startupCategory(error), errorType: safeError(error) }));
   await shutdown(); process.exitCode = 1;
 }
 
