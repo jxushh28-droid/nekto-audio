@@ -11,6 +11,8 @@ import { observeAudioSession } from './session-observation.js';
 import { writeTokenExtension, extensionBrowserOptions } from './token-extension.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
+import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificationReport } from './network-diagnostics.js';
+
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 
 export class NektoBrowser {
@@ -104,6 +106,7 @@ export class NektoBrowser {
       const page = context.pages()[0] || await context.newPage();
       check();
       this.page = page;
+      await attachNektoDiagnostics(page, token, { current: () => generation === this.generation && this.page === page });
       await page.exposeBinding('pushNektoAudio', ({ frame }, base64) => {
         if (this.forwarding && generation === this.generation && frame === page.mainFrame() &&
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
@@ -126,6 +129,9 @@ export class NektoBrowser {
         if (!observed.ok) throw authorizationError(observed.reason === 'authorization-timeout' ? 'client-not-ready' : observed.reason);
       }
       check();
+      const verification = await page.evaluate(installVerificationObserver, { origin: new URL(NEKTO_URL).origin });
+      check();
+      if (verification) console.log(JSON.stringify({ event: 'nekto_verification_baseline', ...sanitizeVerificationReport(verification) }));
       const authorization = await page.evaluate(confirmAudioToken, { token });
       check();
       this.authorizationDiagnostics = authorization.diagnostics || null;

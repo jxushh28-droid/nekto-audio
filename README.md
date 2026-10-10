@@ -47,3 +47,9 @@ Requires Node 24.17+. Set environment variables in your shell, or run with Node'
 
 `npm test` checks token persistence, private extension file permissions, extension storage behavior and bounded PCM buffering. `npm run test:browser` loads the real extension against local fixtures, checks that its token is present before the first page script and in matching frames, checks that unrelated origins receive no token, and verifies token replacement with preserved profile settings. It exercises repeated join, two successive native Next actions with Kazakh links and Russian styled controls, closing confirmation animations, untouched cookie controls and redacted diagnostics. It also runs a Chromium WebRTC loopback test to verify incoming audio reaches Node as 20 ms, 48 kHz stereo signed 16-bit little-endian PCM and checks peer cleanup. Both tests run in the Docker build. A live Nekto-to-Discord call requires the owner to set a valid Nekto token and invoke `/join` from Discord.
 
+
+## Verification diagnostics
+
+Railway logs now record whether the configured token appears in parsed native socket messages, with fixed event categories and equality booleans. A read-only Vuex subscriber records changes to native CAPTCHA flags, including their primitive type so a string such as `"false"` can be distinguished from a boolean. Failed requests and HTTP errors are classified as site, audio or CAPTCHA resources. URLs, query strings, cookies, headers, raw socket payloads and credential values are excluded. These observations do not commit Vuex state or change verification decisions.
+
+After an update, use `/join` then `/status` once to produce a fresh trace. A matching storage/live token alone does not establish that the same credential was transmitted, or that the server waived verification. The local Chromium fixture tests these diagnostics against simulated resource failures and native store mutations; it does not establish that a live Nekto call succeeds.

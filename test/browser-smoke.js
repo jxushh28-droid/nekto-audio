@@ -12,6 +12,8 @@ import { NektoBrowser } from '../src/nekto.js';
 import { writeTokenExtension, extensionBrowserOptions } from '../src/token-extension.js';
 import { waitForStartControl, inspectStartControls } from '../src/start-controls.js';
 
+import { attachNektoDiagnostics, installVerificationObserver } from '../src/network-diagnostics.js';
+
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html');
@@ -30,6 +32,8 @@ try {
   });
   await context.grantPermissions(['microphone'], { origin });
   const page = await context.newPage();
+  const diagnosticReports = [];
+  await attachNektoDiagnostics(page, 'local-test-token', { origin, log: report => diagnosticReports.push(report) });
   const frames = [];
   await page.exposeBinding('pushNektoAudio', (_, base64) => frames.push(Buffer.from(base64, 'base64')));
   await page.addInitScript(installBrowserRelay, { origin });
@@ -66,14 +70,26 @@ try {
   });
   assert(Object.values(microphonePaths).every(Boolean));
   assert.equal(microphonePaths.getUserMedia, true);
+  // Simulated failed resources exercise actual Playwright network listeners; no live site requests.
+  await page.route('https://audio.nekto-me.kz/diagnostic-fixture**', route => route.fulfill({ status: 503, headers: { 'access-control-allow-origin': '*' }, body: 'fixture unavailable' }));
+  await page.route('https://www.google.com/recaptcha/diagnostic-fixture**', route => route.abort('failed'));
+  await page.evaluate(async () => {
+    await fetch('https://audio.nekto-me.kz/diagnostic-fixture?token=local-test-token').catch(() => {});
+    await fetch('https://www.google.com/recaptcha/diagnostic-fixture?token=local-test-token').catch(() => {});
+  });
+  assert(diagnosticReports.some(report => report.event === 'nekto_http_failed' && report.target === 'audio' && report.status === 503));
+  assert(diagnosticReports.some(report => report.event === 'nekto_request_failed' && report.target === 'captcha'));
+  assert(!JSON.stringify(diagnosticReports).includes('local-test-token'));
   // A minimal Vuex client fixture checks the serialized functions in real Chromium.
   await page.evaluate(() => {
     const subscribers = new Set();
     const store = {
       state: { user: { authToken: JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken, tokenId: null }, system: { isFirstLoaded: true, isAuth: false, socketConnected: true } },
       commit(type, token) {
-        if (type !== 'user/setAuthToken') throw new Error('Wrong mutation');
-        this.state.user.authToken = token;
+        if (type === 'user/setAuthToken') this.state.user.authToken = token;
+        else if (type === 'system/socket_captcha') this.state.system.captchaRequired = token;
+        else throw new Error('Wrong mutation');
+        subscribers.forEach(callback => callback({ type }));
       },
       subscribe(callback) { subscribers.add(callback); return () => subscribers.delete(callback); },
     };
@@ -89,6 +105,17 @@ try {
   assert.equal(authorization.ok, true);
   assert.equal(authorization.reason, 'native-session-confirmed');
   assert.equal(authorization.diagnostics.identityPresent, true);
+  await page.evaluate(installVerificationObserver, { origin });
+  await page.evaluate(() => document.body.__vue__.$store.commit('system/socket_captcha', 'false'));
+  await page.waitForFunction(() => document.body.__vue__.$store.state.system.captchaRequired === 'false');
+  // Wait for the asynchronous binding, without changing the site's state or authorization.
+  for (let i = 0; i < 50 && !diagnosticReports.some(report => report.mutation === 'system/socket_captcha'); i++) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert(diagnosticReports.some(report => report.mutation === 'system/socket_captcha' && report.captcha.type === 'string' && report.captcha.value === 'false'));
+  assert.equal(await page.evaluate(() => document.body.__vue__.$store.state.system.captchaRequired), 'false');
+  await page.evaluate(() => document.body.__vue__.$store.commit('system/socket_captcha', false));
+  assert(!JSON.stringify(diagnosticReports).includes('local-test-token'));
   // Exercise /next against actual visible DOM controls without a new page or registration.
   await page.evaluate(() => {
     const store = document.body.__vue__.$store;
@@ -287,7 +314,7 @@ try {
   const replaced = await context.newPage(); await replaced.goto(origin);
   assert.equal(await replaced.evaluate(() => window.tokenAtFirstScript), 'replacement-test-token');
   assert.equal(await replaced.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).settings.theme), 'fixture-theme');
-  console.log('Browser integration passed: real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; repeated join; two native next calls with Kazakh links and styled Russian controls; fading confirmation; cookie controls untouched; private diagnostics; restrictions; microphone; WebRTC PCM; missed track recovery; cleanup.');
+  console.log('Browser integration passed: read-only Vuex flag transitions and failed HTTP/CAPTCHA request tracing; real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; repeated join; two native next calls with Kazakh links and styled Russian controls; fading confirmation; cookie controls untouched; private diagnostics; restrictions; microphone; WebRTC PCM; missed track recovery; cleanup.');
 } finally {
   await context?.close();
   await new Promise(resolve => server.close(resolve));
