@@ -139,6 +139,9 @@ export function extensionBrowserOptions(extensionPath, silentMicrophonePath, use
       '--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
+      // Critical: remove the single biggest bot-detection tell.
+      // Without this flag navigator.webdriver === true and every anti-bot script stops here.
+      '--disable-blink-features=AutomationControlled',
       ...(silentMicrophonePath ? [`--use-file-for-fake-audio-capture=${silentMicrophonePath}`] : []),
       ...(userAgent ? [`--user-agent=${userAgent}`] : []),
       `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`,

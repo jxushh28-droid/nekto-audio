@@ -14,6 +14,62 @@
  */
 export function installAntiDetect({ fptHash, fpSeed }) {
 
+  // ── 0. navigator.webdriver — the #1 bot detection signal ───────────────────
+  // Playwright (like Puppeteer) sets navigator.webdriver = true unless the
+  // --disable-blink-features=AutomationControlled flag is passed AND the JS
+  // property is explicitly removed. We do both: the flag is set in
+  // extensionBrowserOptions(); this override removes the JS-level property so
+  // runtime checks (typeof navigator.webdriver, navigator.webdriver === true)
+  // return undefined rather than true.
+  try {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+      configurable: true,
+      enumerable: true,
+    });
+  } catch (_) {}
+
+  // ── 0b. navigator.plugins + chrome object ──────────────────────────────────
+  // Headless Chrome: navigator.plugins.length === 0 (dead giveaway).
+  // Real Chrome: 3 plugins (PDF Viewer, Chrome PDF Viewer, Native Client).
+  // Also ensure window.chrome exists (headless sometimes lacks it).
+  try {
+    const makeFakePlugin = (name, filename, description) => {
+      const mime = { type: 'application/x-google-chrome-pdf', suffixes: 'pdf', description };
+      const plugin = Object.create(Plugin.prototype);
+      Object.defineProperty(plugin, 'name', { get: () => name });
+      Object.defineProperty(plugin, 'filename', { get: () => filename });
+      Object.defineProperty(plugin, 'description', { get: () => description });
+      Object.defineProperty(plugin, 'length', { get: () => 1 });
+      plugin[0] = mime;
+      return plugin;
+    };
+    const fakePlugins = [
+      makeFakePlugin('PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
+      makeFakePlugin('Chrome PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
+      makeFakePlugin('Chromium PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
+      makeFakePlugin('Microsoft Edge PDF Viewer', 'internal-pdf-viewer', 'Portable Document Format'),
+      makeFakePlugin('WebKit built-in PDF', 'internal-pdf-viewer', 'Portable Document Format'),
+    ];
+    const fakePluginArray = Object.create(PluginArray.prototype);
+    fakePlugins.forEach((p, i) => { fakePluginArray[i] = p; });
+    Object.defineProperty(fakePluginArray, 'length', { get: () => fakePlugins.length });
+    fakePluginArray.item = (i) => fakePlugins[i];
+    fakePluginArray.namedItem = (n) => fakePlugins.find(p => p.name === n) || null;
+    fakePluginArray.refresh = () => {};
+    Object.defineProperty(navigator, 'plugins', { get: () => fakePluginArray, configurable: true });
+  } catch (_) {}
+
+  // Ensure window.chrome is present (headless sometimes skips it).
+  try {
+    if (!window.chrome) {
+      Object.defineProperty(window, 'chrome', {
+        get: () => ({ runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} }),
+        configurable: true,
+      });
+    }
+  } catch (_) {}
+
   // ── 1. FPT hash bypass ──────────────────────────────────────────────────────
   // nekto encrypts WS frames with WebCrypto. The "set-fpt" event carries a
   // FingerprintJS visitorId (fpt field) that nekto uses as device identity for
