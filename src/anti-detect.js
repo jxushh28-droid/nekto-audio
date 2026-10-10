@@ -84,11 +84,33 @@ export function installAntiDetect({ fptHash, fpSeed }) {
         else if (ArrayBuffer.isView(data)) buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
         if (buf) {
           const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
-          if (text.includes('"fpt"')) {
+          if (text.includes('"fpt"') || text.includes('"deviceInfo"') || text.includes('"canvas"')) {
             try {
               const obj = JSON.parse(text);
-              if (obj && typeof obj.fpt === 'string' && obj.fpt !== fptHash) {
-                obj.fpt = fptHash;
+              if (obj && typeof obj === 'object') {
+                // 1. Replace FPT hash with per-token stable id (prevents cross-slot ban contamination)
+                if (typeof obj.fpt === 'string' && obj.fpt !== fptHash) obj.fpt = fptHash;
+
+                // 2. Remove canvas / plugins / duration — top-level bot-detection fields.
+                //    These components expose automation even with spoofed values and are
+                //    flagged by the server's shadow-ban logic (per bundle analysis).
+                delete obj.canvas;
+                delete obj.plugins;
+                delete obj.duration;
+
+                // 3. Strip `ua` from deviceInfo (UAParser result).
+                //    nekto's own code does `delete t.ua` before sending device info;
+                //    if we don't match this, the field mismatch triggers VPGEN failure.
+                if (obj.deviceInfo && typeof obj.deviceInfo === 'object') {
+                  delete obj.deviceInfo.ua;
+                  delete obj.deviceInfo['user-agent'];
+                }
+
+                // 4. Same cleanup on nested webglInfo.components if present
+                if (obj.webglInfo && obj.webglInfo.components) {
+                  delete obj.webglInfo.components.canvas;
+                }
+
                 data = new TextEncoder().encode(JSON.stringify(obj));
               }
             } catch (_) {}

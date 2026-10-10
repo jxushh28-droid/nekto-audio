@@ -14,6 +14,14 @@ export function describeProtocolMessage(plaintext, token, direction) {
       typeof message.userId === 'string' ? 'userId' : 'none';
     report.credentialField = field;
     report.credentialMatches = field !== 'none' && !!token && message[field] === token;
+    // Log which top-level keys were sent (no values) so we can verify payload shape
+    report.registerFields = Object.keys(message).filter(k => k !== field && k !== 'type').slice(0, 24).join(',');
+    // Flag if suspicious bot-tell fields are still present after anti-detect hook
+    report.hasFpt = typeof message.fpt === 'string';
+    report.hasCanvas = Object.hasOwn(message, 'canvas');
+    report.hasPlugins = Object.hasOwn(message, 'plugins');
+    report.hasDuration = Object.hasOwn(message, 'duration');
+    report.deviceInfoHasUa = !!(message.deviceInfo && (message.deviceInfo.ua || message.deviceInfo['user-agent']));
   }
   if (message.type === 'scan-for-peer') {
     report.searchToken = !Object.hasOwn(message, 'token') ? 'missing' :
@@ -47,6 +55,12 @@ export function sanitizeProtocolReport(report) {
     safe.credentialField = ['authToken', 'userId', 'none'].includes(report.credentialField) ?
       report.credentialField : 'none';
     safe.credentialMatches = report.credentialMatches === true;
+    if (typeof report.registerFields === 'string') safe.registerFields = report.registerFields.slice(0, 256);
+    safe.hasFpt = report.hasFpt === true;
+    safe.hasCanvas = report.hasCanvas === true;
+    safe.hasPlugins = report.hasPlugins === true;
+    safe.hasDuration = report.hasDuration === true;
+    safe.deviceInfoHasUa = report.deviceInfoHasUa === true;
   }
   if (report.type === 'scan-for-peer') safe.searchToken =
     ['missing', 'null', 'empty', 'present', 'other'].includes(report.searchToken) ? report.searchToken : 'other';
