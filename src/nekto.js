@@ -140,13 +140,17 @@ export class NektoBrowser {
           if (report.direction === 'decrypt' && report.type === 'registered') {
             console.log(JSON.stringify({ event: 'nekto_register_response', success: report.success }));
           }
-          // When the server sends captcha-request, it stops routing partners until a solution
-          // is received. Instead of staying stuck in the searching state indefinitely, restart
-          // the session quickly so we get a fresh connection that may not be challenged.
-          if (report.direction === 'decrypt' && report.type === 'captcha-request' &&
-              generation === this.generation && this.page === page) {
-            console.log(JSON.stringify({ event: 'nekto_captcha_request_received', action: 'restarting_session' }));
-            setImmediate(() => { if (generation === this.generation) this.stop().catch(() => {}); });
+          // Log captcha-request but do NOT stop the session here.
+          // Stopping via this async path races with the normal flow and cancels the
+          // session with no lastFailure, making it look like a silent clean stop to the user.
+          // The normal flow already handles captcha: waitForStartControl polls assertCallAvailable
+          // which throws NEKTO_VERIFICATION if the Vue store sets captchaRequired=true, and
+          // finishSearch checks state.verification after searching starts. Both paths set
+          // lastFailure so /status shows the real cause. If captcha-request arrives after
+          // searching is confirmed (finishSearch already returned), the session stays up and
+          // may still route a partner.
+          if (report.direction === 'decrypt' && report.type === 'captcha-request') {
+            console.log(JSON.stringify({ event: 'nekto_captcha_request_received', action: 'session_continues' }));
           }
         },
       });
