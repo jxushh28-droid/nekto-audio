@@ -12,7 +12,7 @@
  *  5. userAgentData   — platform = "Windows" (Client Hints complement)
  *  6. Cookie banner + tab-conflict auto-click
  */
-export function installAntiDetect({ fptHash, fpSeed }) {
+export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
 
   // ── 0. navigator.webdriver — the #1 bot detection signal ───────────────────
   // Playwright (like Puppeteer) sets navigator.webdriver = true unless the
@@ -84,21 +84,27 @@ export function installAntiDetect({ fptHash, fpSeed }) {
         else if (ArrayBuffer.isView(data)) buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
         if (buf) {
           const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
-          if (text.includes('"fpt"') || text.includes('"deviceInfo"') || text.includes('"canvas"')) {
+          if (text.includes('"fpt"') || text.includes('"deviceInfo"') || text.includes('"canvas"') ||
+              text.includes('"gumHash"') || text.includes('"type"') && text.includes('"register"')) {
             try {
               const obj = JSON.parse(text);
               if (obj && typeof obj === 'object') {
                 // 1. Replace FPT hash with per-token stable id (prevents cross-slot ban contamination)
-                if (typeof obj.fpt === 'string' && obj.fpt !== fptHash) obj.fpt = fptHash;
+                if (fptHash && typeof obj.fpt === 'string' && obj.fpt !== fptHash) obj.fpt = fptHash;
 
-                // 2. Remove canvas / plugins / duration — top-level bot-detection fields.
+                // 2. Replace gumHash — nekto computes this from the getUserMedia audio stream.
+                //    With --use-fake-device-for-media-stream the hash is a bot fingerprint.
+                //    Replace with SHA-256(token)-derived value: stable per token, looks real.
+                if (gumHash && typeof obj.gumHash === 'string') obj.gumHash = gumHash;
+
+                // 3. Remove canvas / plugins / duration — top-level bot-detection fields.
                 //    These components expose automation even with spoofed values and are
                 //    flagged by the server's shadow-ban logic (per bundle analysis).
                 delete obj.canvas;
                 delete obj.plugins;
                 delete obj.duration;
 
-                // 3. Strip `ua` from deviceInfo (UAParser result).
+                // 4. Strip `ua` from deviceInfo (UAParser result).
                 //    nekto's own code does `delete t.ua` before sending device info;
                 //    if we don't match this, the field mismatch triggers VPGEN failure.
                 if (obj.deviceInfo && typeof obj.deviceInfo === 'object') {
@@ -106,7 +112,7 @@ export function installAntiDetect({ fptHash, fpSeed }) {
                   delete obj.deviceInfo['user-agent'];
                 }
 
-                // 4. Same cleanup on nested webglInfo.components if present
+                // 5. Same cleanup on nested webglInfo.components if present
                 if (obj.webglInfo && obj.webglInfo.components) {
                   delete obj.webglInfo.components.canvas;
                 }

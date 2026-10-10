@@ -139,7 +139,9 @@ export class NektoBrowser {
           // right token is being sent and whether the server accepted it.
           if (report.direction === 'encrypt' && report.type === 'register') {
             console.log(JSON.stringify({ event: 'nekto_register_sent',
-              credentialField: report.credentialField, credentialMatches: report.credentialMatches }));
+              credentialField: report.credentialField, credentialMatches: report.credentialMatches,
+              hasGumHash: report.hasGumHash, hasFpt: report.hasFpt,
+              hasCanvas: report.hasCanvas, hasPlugins: report.hasPlugins, hasDuration: report.hasDuration }));
           }
           if (report.direction === 'decrypt' && report.type === 'registered') {
             console.log(JSON.stringify({ event: 'nekto_register_response', success: report.success }));
@@ -165,11 +167,14 @@ export class NektoBrowser {
       });
       await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
       // Anti-detection: FPT hash bypass + WebGL/Canvas/WebGPU/Client Hints spoof + tab-conflict auto-click.
-      // fptHash = md5(token) → stable per-token device identity on nekto's server (prevents ban cross-contamination).
+      // fptHash = md5(token)    → stable per-token device identity on nekto's server (prevents ban cross-contamination).
       // fpSeed  = FNV-1a(token) → LCG seed for canvas pixel noise (breaks FingerprintJS cross-slot correlation).
+      // gumHash = sha256(token+'gum') → replaces the getUserMedia stream hash sent in the register WS payload.
+      //           A fake/silent mic produces a detectable gumHash; we substitute a deterministic token-derived value.
       await page.addInitScript(installAntiDetect, {
         fptHash: createHash('md5').update(token || '').digest('hex'),
         fpSeed: fpSeed(token || ''),
+        gumHash: createHash('sha256').update((token || '') + '-gum').digest('hex'),
       });
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       stage = 'load';
