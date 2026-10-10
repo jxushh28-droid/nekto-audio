@@ -89,8 +89,15 @@ export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
             try {
               const obj = JSON.parse(text);
               if (obj && typeof obj === 'object') {
-                // 1. Replace FPT hash with per-token stable id (prevents cross-slot ban contamination)
-                if (fptHash && typeof obj.fpt === 'string' && obj.fpt !== fptHash) obj.fpt = fptHash;
+                // 1. Replace FPT hash with per-token stable id (prevents cross-slot ban contamination).
+                //    CRITICAL: Do NOT replace fpt when type === 'set-fpt'.
+                //    The set-fpt message includes `infoDataS` which is AES-CBC encrypted using
+                //    key = (original_fpt + authToken + tokenId). If we replace fpt here the server
+                //    reconstructs a different key, decryption fails, and the account gets shadow-banned.
+                //    fpt replacement is only needed in the 'register' message (WS envelope payload).
+                if (fptHash && typeof obj.fpt === 'string' && obj.fpt !== fptHash && obj.type !== 'set-fpt') {
+                  obj.fpt = fptHash;
+                }
 
                 // 2. Replace gumHash — nekto computes this from the getUserMedia audio stream.
                 //    With --use-fake-device-for-media-stream the hash is a bot fingerprint.
