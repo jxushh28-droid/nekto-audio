@@ -105,16 +105,18 @@ export function tokenExtensionScript(token) {
   const write = () => {
     try {
       const saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {};
-      if (saved?.user?.authToken === TOKEN) return true;
+      // Always check BOTH conditions. If only the token matches but cookiesAccepted
+      // is not set, we must still write — otherwise nekto connects WS without the
+      // consent flag and the server sends captcha-request before Playwright can click
+      // the cookie button.
+      if (saved?.user?.authToken === TOKEN && saved?.settings?.cookiesAccepted === true) return true;
       saved.user = saved.user || {};
       saved.user.authToken = TOKEN;
       // Pre-accept cookies so nekto's Vue app never enters the captcha-triggering
       // state where WS connects before the cookie consent flag is set.
       // Nekto stores acceptance under settings.cookiesAccepted inside the same key.
-      // Pre-accept cookies — nekto reads this flag from its own storage key to
-      // decide whether to show the consent modal and whether the WS client is
-      // "trusted". Setting it here at document_start prevents the server from
-      // receiving a connection that looks like a fresh/bot session.
+      // Setting it here at document_start guarantees the flag is present before
+      // any page script reads it — even if the token was already correct.
       saved.settings = saved.settings || {};
       saved.settings.cookiesAccepted = true;
       localStorage.setItem(KEY, JSON.stringify(saved));

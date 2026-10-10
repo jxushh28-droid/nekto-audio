@@ -131,6 +131,15 @@ export class NektoBrowser {
         current: () => generation === this.generation && this.page === page,
         onProtocol: report => {
           this.protocolDiagnostics = updateProtocolSummary(this.protocolDiagnostics, report);
+          // Log register/registered frames so we can see in Railway logs whether the
+          // right token is being sent and whether the server accepted it.
+          if (report.direction === 'encrypt' && report.type === 'register') {
+            console.log(JSON.stringify({ event: 'nekto_register_sent',
+              credentialField: report.credentialField, credentialMatches: report.credentialMatches }));
+          }
+          if (report.direction === 'decrypt' && report.type === 'registered') {
+            console.log(JSON.stringify({ event: 'nekto_register_response', success: report.success }));
+          }
           // When the server sends captcha-request, it stops routing partners until a solution
           // is received. Instead of staying stuck in the searching state indefinitely, restart
           // the session quickly so we get a fresh connection that may not be challenged.
@@ -155,8 +164,29 @@ export class NektoBrowser {
       });
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       stage = 'load';
+      // Clear all cookies from the nekto domain before each session.
+      // The persistent profile accumulates cookies that the server uses to identify
+      // and track sessions server-side. Even when the token changes, stale cookies
+      // can keep the server associating this context with a flagged session.
+      // Clearing cookies here gives every openSession() call a clean slate while
+      // still preserving extension state and any other per-profile data.
+      await context.clearCookies({ domain: 'nekto-me.kz' }).catch(() => {});
+      check();
       const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
       if (response && response.status() >= 400) throw searchError('load');
+      // Confirm the extension wrote the token and cookiesAccepted flag to localStorage.
+      // If authTokenPresent=false the extension did not fire (extension load failure,
+      // wrong matches pattern, etc.). If cookiesAccepted=false the early-return fired
+      // before writing it — the bug is in tokenExtensionScript's guard condition.
+      const injection = await page.evaluate(key => {
+        try {
+          const saved = JSON.parse(localStorage.getItem(key) || '{}');
+          return { authTokenPresent: typeof saved?.user?.authToken === 'string' && saved.user.authToken.length > 0,
+            cookiesAccepted: saved?.settings?.cookiesAccepted === true };
+        } catch { return { authTokenPresent: false, cookiesAccepted: false }; }
+      }, 'storage_audio_v2');
+      console.log(JSON.stringify({ event: 'nekto_injection_check', ...injection }));
+      check();
       this.microphone = await page.evaluate(inspectBrowserMicrophone);
       check();
       if (this.microphone.permission !== 'granted' || !this.microphone.inputs) throw searchError('microphone');

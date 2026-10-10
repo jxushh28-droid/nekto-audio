@@ -16,6 +16,21 @@ test('extension preserves existing settings and skips an already matching token'
   assert.equal(writes, 1);
 });
 
+test('extension writes cookiesAccepted even when token already matches but flag is missing', () => {
+  // Regression: old code early-returned on token match without checking cookiesAccepted.
+  // Persistent profile can have the correct token but no cookiesAccepted from a prior version.
+  // Without this write, nekto connects WS before the consent flag is set → server sends captcha-request.
+  let saved = JSON.stringify({ user: { authToken: 'my-token' } }), writes = 0;
+  const context = { localStorage: { getItem: () => saved, setItem: (_, value) => { writes++; saved = value; } },
+    document: { addEventListener() { throw Error('Unexpected retry'); } } };
+  vm.runInNewContext(tokenExtensionScript('my-token'), context);
+  assert.equal(writes, 1, 'must write even though token already matches');
+  assert.equal(JSON.parse(saved)?.settings?.cookiesAccepted, true, 'must set cookiesAccepted');
+  // Second run — both conditions now satisfied — should not write again.
+  vm.runInNewContext(tokenExtensionScript('my-token'), context);
+  assert.equal(writes, 1, 'must not write a second time once fully correct');
+});
+
 test('extension retains the uploaded readystatechange retry and safely quotes runtime tokens', () => {
   let saved = 'broken', retry;
   const token = 'fixture";globalThis.executed=true;\\\n';
