@@ -8,7 +8,7 @@ import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
-import { writeTokenExtension, extensionBrowserOptions } from './token-extension.js';
+import { writeTokenExtension, extensionBrowserOptions, generateFingerprint } from './token-extension.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
 import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificationReport } from './network-diagnostics.js';
@@ -83,12 +83,15 @@ export class NektoBrowser {
     await writeTokenExtension(this.extensionPath, token);
     await writeSilentMicrophone(this.microphonePath);
     await mkdir(this.profilePath, { recursive: true, mode: 0o700 });
+    // Derive the same deterministic fingerprint used inside the extension script
+    // so the Chromium --user-agent flag and the JS navigator spoof always agree.
+    const { userAgent } = generateFingerprint(token);
     let context;
-    try { context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath, this.microphonePath)); }
+    try { context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath, this.microphonePath, userAgent)); }
     catch (error) {
       if (!isProfileLockError(error) || !await recoverRailwayProfileLock(this.profilePath)) throw error;
       console.log(JSON.stringify({ event: 'nekto_profile_lock_recovered' }));
-      context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath, this.microphonePath));
+      context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath, this.microphonePath, userAgent));
     }
     this.context = context; this.browser = context.browser();
     return context;
