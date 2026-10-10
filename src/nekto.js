@@ -15,6 +15,8 @@ import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificati
 
 import { isProfileLockError, recoverRailwayProfileLock } from './profile-lock.js';
 
+import { writeSilentMicrophone } from './silent-microphone.js';
+
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 
 export class NektoBrowser {
@@ -27,6 +29,7 @@ export class NektoBrowser {
     this.controlDiagnostics = null;
     this.profilePath = resolve(directory, 'nekto-browser');
     this.extensionPath = resolve(directory, 'nekto-prime');
+    this.microphonePath = resolve(directory, 'silent-microphone.wav');
   }
 
   stopSessionMonitor() {
@@ -75,13 +78,14 @@ export class NektoBrowser {
   async launch(token = '') {
     if (this.context) return this.context;
     await writeTokenExtension(this.extensionPath, token);
+    await writeSilentMicrophone(this.microphonePath);
     await mkdir(this.profilePath, { recursive: true, mode: 0o700 });
     let context;
-    try { context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath)); }
+    try { context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath, this.microphonePath)); }
     catch (error) {
       if (!isProfileLockError(error) || !await recoverRailwayProfileLock(this.profilePath)) throw error;
       console.log(JSON.stringify({ event: 'nekto_profile_lock_recovered' }));
-      context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath));
+      context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath, this.microphonePath));
     }
     this.context = context; this.browser = context.browser();
     return context;

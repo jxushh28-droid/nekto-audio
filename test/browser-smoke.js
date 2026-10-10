@@ -16,6 +16,8 @@ import { attachNektoDiagnostics, installVerificationObserver } from '../src/netw
 
 import { recoverRailwayProfileLock } from '../src/profile-lock.js';
 
+import { writeSilentMicrophone } from '../src/silent-microphone.js';
+
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html');
@@ -26,11 +28,13 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 const directory = await mkdtemp(join(tmpdir(), 'extension-browser-test-'));
 const extensionPath = join(directory, 'extension');
 const profilePath = join(directory, 'profile');
+const silentMicrophonePath = join(directory, 'silent-microphone.wav');
 let context;
 try {
+  await writeSilentMicrophone(silentMicrophonePath);
   await writeTokenExtension(extensionPath, 'local-test-token', { matches: ['http://127.0.0.1/*'] });
   context = await chromium.launchPersistentContext(profilePath, {
-    ...extensionBrowserOptions(extensionPath), executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
+    ...extensionBrowserOptions(extensionPath, silentMicrophonePath), executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
   });
   await context.grantPermissions(['microphone'], { origin });
   const page = await context.newPage();
@@ -38,7 +42,15 @@ try {
   await attachNektoDiagnostics(page, 'local-test-token', { origin, log: report => diagnosticReports.push(report) });
   const frames = [];
   await page.exposeBinding('pushNektoAudio', (_, base64) => frames.push(Buffer.from(base64, 'base64')));
-  await page.addInitScript(installBrowserRelay, { origin });
+  await page.addInitScript({ content: `
+    window.mediaAPIsBeforeRelay = {
+      modern: navigator.mediaDevices.getUserMedia,
+      legacy: navigator.getUserMedia,
+      webkit: navigator.webkitGetUserMedia,
+      moz: navigator.mozGetUserMedia,
+    };
+    (${installBrowserRelay.toString()})({ origin: ${JSON.stringify(origin)} });
+  ` });
   await page.goto(origin);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken), 'local-test-token');
   assert.equal(await page.evaluate(() => window.tokenAtFirstScript), 'local-test-token', 'Extension did not run before page scripts');
@@ -52,6 +64,33 @@ try {
   await unmatched.goto('http://unmatched.invalid/');
   assert.equal(await unmatched.evaluate(() => localStorage.getItem('storage_audio_v2')), null);
   await unmatched.close();
+  assert.deepEqual(await page.evaluate(() => ({
+    modern: navigator.mediaDevices.getUserMedia === window.mediaAPIsBeforeRelay.modern,
+    legacy: navigator.getUserMedia === window.mediaAPIsBeforeRelay.legacy,
+    webkit: navigator.webkitGetUserMedia === window.mediaAPIsBeforeRelay.webkit,
+    moz: navigator.mozGetUserMedia === window.mediaAPIsBeforeRelay.moz,
+  })), { modern: true, legacy: true, webkit: true, moz: true }, 'Relay replaced a native microphone API');
+  const silentInput = await page.evaluate(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+    } });
+    const audio = new AudioContext();
+    const input = audio.createMediaStreamSource(stream);
+    const analyser = audio.createAnalyser(); input.connect(analyser); await audio.resume();
+    let peak = 0;
+    const samples = new Float32Array(analyser.fftSize);
+    // Covers native startup and more than one complete WAV loop.
+    for (let i = 0; i < 15; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      analyser.getFloatTimeDomainData(samples);
+      for (const value of samples) peak = Math.max(peak, Math.abs(value));
+    }
+    const live = stream.getAudioTracks()[0].readyState === 'live';
+    stream.getTracks().forEach(track => track.stop()); input.disconnect(); await audio.close();
+    return { peak, live };
+  });
+  assert.equal(silentInput.live, true);
+  assert(silentInput.peak < 0.0001, 'Native microphone contains sound');
   const microphone = await page.evaluate(inspectBrowserMicrophone);
   assert.equal(microphone.permission, 'granted');
   assert(microphone.inputs > 0); assert.equal(microphone.legacyApi, true);
@@ -313,12 +352,12 @@ try {
   assert.equal(await recoverRailwayProfileLock(profilePath, { railwayRuntime: true, expectedDirectory: profilePath }), true);
   await writeTokenExtension(extensionPath, 'replacement-test-token', { matches: ['http://127.0.0.1/*'] });
   context = await chromium.launchPersistentContext(profilePath, {
-    ...extensionBrowserOptions(extensionPath), executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
+    ...extensionBrowserOptions(extensionPath, silentMicrophonePath), executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
   });
   const replaced = await context.newPage(); await replaced.goto(origin);
   assert.equal(await replaced.evaluate(() => window.tokenAtFirstScript), 'replacement-test-token');
   assert.equal(await replaced.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).settings.theme), 'fixture-theme');
-  console.log('Browser integration passed: stale profile lock recovery with preserved settings; read-only Vuex flag transitions and failed HTTP/CAPTCHA request tracing; real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; repeated join; two native next calls with Kazakh links and styled Russian controls; fading confirmation; cookie controls untouched; private diagnostics; restrictions; microphone; WebRTC PCM; missed track recovery; cleanup.');
+  console.log('Browser integration passed: native microphone APIs unchanged; live silent WAV capture across loops; modern and legacy permission paths; stale profile lock recovery with preserved settings; read-only Vuex flag transitions and failed HTTP/CAPTCHA request tracing; real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; repeated join; two native next calls with Kazakh links and styled Russian controls; fading confirmation; cookie controls untouched; private diagnostics; restrictions; microphone; WebRTC PCM; missed track recovery; cleanup.');
 } finally {
   await context?.close();
   await new Promise(resolve => server.close(resolve));

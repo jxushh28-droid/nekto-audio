@@ -56,28 +56,8 @@ export function installBrowserRelay({ origin }) {
   })();
   ready.catch(() => { window.__nektoRelay.error = 'Audio capture initialization failed.'; });
 
-  // The requested relay is incoming only. Supply a silent microphone to Nekto.
-  const silentMic = audio.createMediaStreamDestination();
-  const oscillator = audio.createOscillator();
-  const mute = audio.createGain(); mute.gain.value = 0;
-  oscillator.connect(mute); mute.connect(silentMic); oscillator.start();
-  const silentUserMedia = async (constraints) => {
-    if (constraints?.video || !constraints?.audio) throw new DOMException('Audio only', 'NotSupportedError');
-    await audio.resume();
-    return silentMic.stream.clone();
-  };
-  navigator.mediaDevices.getUserMedia = silentUserMedia;
-  // The native voice client may use the older callback API. Keep every audio
-  // entry point on the same silent source instead of opening a physical input.
-  const legacyUserMedia = (constraints, success, failure) => {
-    silentUserMedia(constraints).then(
-      stream => { if (typeof success === 'function') success(stream); },
-      error => { if (typeof failure === 'function') failure(error); },
-    );
-  };
-  navigator.getUserMedia = legacyUserMedia;
-  if ('webkitGetUserMedia' in navigator) navigator.webkitGetUserMedia = legacyUserMedia;
-  if ('mozGetUserMedia' in navigator) navigator.mozGetUserMedia = legacyUserMedia;
+  // Chromium supplies native microphone capture from a silent WAV file.
+  // Leave modern and legacy capture APIs, constraints and permissions intact.
   const capture = async (track) => {
     if (track.kind !== 'audio' || tracks.has(track.id) || pendingTracks.has(track.id)) return;
     pendingTracks.add(track.id);

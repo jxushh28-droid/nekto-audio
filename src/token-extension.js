@@ -37,13 +37,14 @@ export async function writeTokenExtension(directory, token, { matches = ['https:
   return directory;
 }
 
-export function extensionBrowserOptions(extensionPath) {
+export function extensionBrowserOptions(extensionPath, silentMicrophonePath) {
   return {
     channel: 'chromium', headless: true, ignoreDefaultArgs: ['--mute-audio'],
     args: [
       '--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
+      ...(silentMicrophonePath ? [`--use-file-for-fake-audio-capture=${silentMicrophonePath}`] : []),
       `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`,
     ],
   };
