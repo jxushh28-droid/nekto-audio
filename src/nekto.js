@@ -18,11 +18,56 @@ export class NektoBrowser {
     this.onAudio = onAudio; this.page = null; this.browser = null; this.context = null;
     this.generation = 0; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
     this.forwarding = false;
+    this.monitorTimer = null; this.monitorVersion = 0;
     this.authorization = null; this.observedStage = null;
     this.controlDiagnostics = null;
     this.profilePath = resolve(directory, 'nekto-browser');
     this.extensionPath = resolve(directory, 'nekto-prime');
   }
+
+  stopSessionMonitor() {
+    this.monitorVersion++;
+    clearTimeout(this.monitorTimer);
+    this.monitorTimer = null;
+  }
+  startSessionMonitor(page, token, generation = this.generation) {
+    this.stopSessionMonitor();
+    const version = this.monitorVersion;
+    const current = () => version === this.monitorVersion && generation === this.generation &&
+      this.page === page && !page.isClosed();
+    const check = () => { if (!current()) throw new Error('Nekto monitoring was stopped.'); };
+    const tick = async () => {
+      if (!current()) return;
+      try {
+        const observed = await observeAudioSession(page, token, { stage: 'monitor', check });
+        const captureError = await page.evaluate(() => window.__nektoRelay?.error);
+        check();
+        this.callState = observed.callState;
+        this.authorizationDiagnostics = observed.authorizationDiagnostics;
+        const forwarding = canForwardAudio(observed, captureError);
+        if (forwarding !== this.forwarding) {
+          console.log(JSON.stringify({ event: 'nekto_relay_transition',
+            forwarding, phase: this.callState.phase, authorization: observed.authorizationReason }));
+        }
+        this.forwarding = forwarding;
+        if (forwarding) {
+          this.authorization = observed.authorizationReason;
+          // A challenge may clear while the original search remains active.
+          if (this.lastFailure?.code === 'NEKTO_VERIFICATION') this.lastFailure = null;
+        }
+      } catch {
+        if (current()) this.forwarding = false;
+      } finally {
+        if (current()) {
+          this.monitorTimer = setTimeout(tick, 500);
+          this.monitorTimer.unref?.();
+        }
+      }
+    };
+    this.monitorTimer = setTimeout(tick, 500);
+    this.monitorTimer.unref?.();
+  }
+
   async launch(token = '') {
     if (this.context) return this.context;
     await writeTokenExtension(this.extensionPath, token);
@@ -36,6 +81,7 @@ export class NektoBrowser {
     return this.openSession(token);
   }
   async openSession(token) {
+    this.stopSessionMonitor();
     this.forwarding = false;
     const generation = ++this.generation;
     const previous = this.context;
@@ -136,6 +182,10 @@ export class NektoBrowser {
         ? error : searchError(stage);
       this.lastFailure = { code: failure.code || 'NEKTO_CAPTURE_OR_VERIFICATION', message: failure.message };
       throw failure;
+    } finally {
+      if (generation === this.generation && this.page && !this.page.isClosed()) {
+        this.startSessionMonitor(this.page, token, generation);
+      }
     }
   }
   async next(token, { endCurrentCall = true } = {}) {
@@ -145,6 +195,7 @@ export class NektoBrowser {
     const check = () => {
       if (generation !== this.generation || this.page !== page) throw new Error('Nekto search was stopped.');
     };
+    this.stopSessionMonitor();
     this.forwarding = false;
     try {
       await advanceAudioCall(page, { check, endCurrentCall, authorize: async () => {
@@ -165,6 +216,10 @@ export class NektoBrowser {
         code: failure.code, ...this.callState, ...this.controlDiagnostics }));
       // Keep the native connection and any restriction visible. Never retry by re-registering.
       throw failure;
+    } finally {
+      if (generation === this.generation && this.page === page && !page.isClosed()) {
+        this.startSessionMonitor(page, token, generation);
+      }
     }
   }
   async recordSessionState(page, token, stage, check) {
@@ -214,9 +269,10 @@ export class NektoBrowser {
       iceStates: status.iceStates || [], trackEvents: status.trackEvents || 0, capturedTracks: status.tracks || 0,
       inboundPackets: status.inboundPackets || 0, inboundBytes: status.inboundBytes || 0,
       audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
-    return { ...status, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    return { ...status, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async stop() {
+    this.stopSessionMonitor();
     this.generation++;
     this.forwarding = false;
     const context = this.context;
@@ -231,3 +287,15 @@ export class NektoBrowser {
   }
 }
 
+
+export function canForwardAudio(observed, captureError) {
+  const state = observed.callState;
+  const d = observed.authorizationDiagnostics;
+  return !!(state && d && !captureError &&
+    !state.verification && !state.restricted && !state.attention &&
+    (state.searching || state.partnerConnected) &&
+    observed.authorizationReason === 'native-session-confirmed' &&
+    d.savedTokenMatches && d.liveTokenMatches && d.identityPresent &&
+    d.authenticated && d.socketConnected && !d.captcha && !d.hcaptcha &&
+    !d.restricted && !d.registrationError);
+}
