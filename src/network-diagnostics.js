@@ -1,3 +1,5 @@
+import { protocolObserverScript, sanitizeProtocolReport } from './protocol-diagnostics.js';
+
 // Read-only diagnostics. Never return raw URLs, socket bodies or credential values.
 export function classifyNektoRequest(raw) {
   try {
@@ -157,7 +159,7 @@ export function installVerificationObserver({ origin } = {}) {
   return window.__nektoVerificationObserver?.snapshot() || null;
 }
 
-export async function attachNektoDiagnostics(page, token, { current = () => true, log = report => console.log(JSON.stringify(report)), origin = 'https://nekto-me.kz' } = {}) {
+export async function attachNektoDiagnostics(page, token, { current = () => true, log = report => console.log(JSON.stringify(report)), onProtocol = () => {}, origin = 'https://nekto-me.kz' } = {}) {
   const emit = report => { if (current()) log(report); };
   page.on('requestfailed', request => {
     const target = classifyNektoRequest(request.url());
@@ -192,5 +194,12 @@ export async function attachNektoDiagnostics(page, token, { current = () => true
     const safe = sanitizeVerificationReport(report);
     if (safe) emit({ event: 'nekto_verification_transition', ...safe });
   });
+  await page.exposeBinding('reportNektoProtocol', ({ frame }, report) => {
+    if (!current() || frame !== page.mainFrame()) return;
+    try { if (new URL(frame.url()).origin !== origin) return; } catch { return; }
+    const safe = sanitizeProtocolReport(report);
+    if (safe) { onProtocol(safe); emit({ event: 'nekto_protocol', ...safe }); }
+  });
+  await page.addInitScript({ content: protocolObserverScript({ origin, token }) });
   await page.addInitScript(installVerificationObserver, { origin });
 }

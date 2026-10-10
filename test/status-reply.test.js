@@ -26,3 +26,17 @@ test('website errors expose diagnostic text without retired command instructions
     callState: { phase: 'awaiting a website prompt' }, promptInfo: { visible: true, category: 'age', text: 'Укажите ваш возраст.' } } });
   assert(reply.content.includes('Укажите ваш возраст.')); assert(!reply.content.includes('/answer')); assert(!reply.content.includes('/prompt'));
 });
+
+test('private status separates storage matches from native registration payload observations', () => {
+  const reply = statusReply({ ...args, token: 'saved-fixture', status: { ...args.status,
+    protocolDiagnostics: { registrationPayloadObserved: true, credentialMatches: false, credentialField: 'authToken',
+      registrationReplyObserved: true, registrationSuccess: 'true', searchToken: 'null', captchaRequested: true } } });
+  assert(reply.content.includes('Native register payload: token matches=false'));
+  assert(reply.content.includes('field=authToken; registered reply=true'));
+  assert(reply.content.includes('Native search token: null; captcha-request received=true'));
+});
+
+test('private status does not infer a native register payload from a storage match', () => {
+  const reply = statusReply({ ...args, token: 'fixture-token' });
+  assert(reply.content.includes('Native register payload: not observed'));
+});

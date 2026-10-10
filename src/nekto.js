@@ -17,6 +17,8 @@ import { isProfileLockError, recoverRailwayProfileLock } from './profile-lock.js
 
 import { writeSilentMicrophone } from './silent-microphone.js';
 
+import { updateProtocolSummary } from './protocol-diagnostics.js';
+
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 
 export class NektoBrowser {
@@ -24,6 +26,7 @@ export class NektoBrowser {
     this.onAudio = onAudio; this.page = null; this.browser = null; this.context = null;
     this.generation = 0; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
     this.forwarding = false;
+    this.protocolDiagnostics = null;
     this.monitorTimer = null; this.monitorVersion = 0;
     this.authorization = null; this.observedStage = null;
     this.controlDiagnostics = null;
@@ -102,6 +105,7 @@ export class NektoBrowser {
     this.page = null; this.context = null; this.lastFailure = null; this.authorizationDiagnostics = null; this.callState = null; this.promptInfo = null; this.microphone = null;
     this.authorization = null; this.observedStage = null;
     this.controlDiagnostics = null;
+    this.protocolDiagnostics = null;
     const check = () => {
       if (generation !== this.generation) throw new Error('Nekto search was stopped.');
     };
@@ -118,7 +122,10 @@ export class NektoBrowser {
       const page = context.pages()[0] || await context.newPage();
       check();
       this.page = page;
-      await attachNektoDiagnostics(page, token, { current: () => generation === this.generation && this.page === page });
+      await attachNektoDiagnostics(page, token, {
+        current: () => generation === this.generation && this.page === page,
+        onProtocol: report => { this.protocolDiagnostics = updateProtocolSummary(this.protocolDiagnostics, report); },
+      });
       await page.exposeBinding('pushNektoAudio', ({ frame }, base64) => {
         if (this.forwarding && generation === this.generation && frame === page.mainFrame() &&
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
@@ -274,7 +281,7 @@ export class NektoBrowser {
   }
   async status(token) {
     const page = this.page;
-    if (!page || page.isClosed()) return { active: false, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    if (!page || page.isClosed()) return { active: false, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
     this.callState = await page.evaluate(readAudioCallState);
     if (token) {
       const identity = await page.evaluate(confirmAudioToken, { token, timeout: 1 });
@@ -287,7 +294,7 @@ export class NektoBrowser {
       iceStates: status.iceStates || [], trackEvents: status.trackEvents || 0, capturedTracks: status.tracks || 0,
       inboundPackets: status.inboundPackets || 0, inboundBytes: status.inboundBytes || 0,
       audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
-    return { ...status, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    return { ...status, protocolDiagnostics: this.protocolDiagnostics, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async stop() {
     this.stopSessionMonitor();

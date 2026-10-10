@@ -18,6 +18,8 @@ import { recoverRailwayProfileLock } from '../src/profile-lock.js';
 
 import { writeSilentMicrophone } from '../src/silent-microphone.js';
 
+import { protocolObserverScript } from '../src/protocol-diagnostics.js';
+
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
   response.setHeader('Content-Type', 'text/html');
@@ -54,6 +56,80 @@ try {
   await page.goto(origin);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken), 'local-test-token');
   assert.equal(await page.evaluate(() => window.tokenAtFirstScript), 'local-test-token', 'Extension did not run before page scripts');
+  // Native AES-GCM fixture: observers preserve ciphertext, inputs and exact Promises.
+  await page.evaluate(() => {
+    window.__nektoProtocolObserver.stop();
+    const subtle = crypto.subtle;
+    if (Object.hasOwn(subtle, 'encrypt') || Object.hasOwn(subtle, 'decrypt')) throw new Error('Observer did not restore native method descriptors');
+    window.fixtureCrypto = { encrypt: subtle.encrypt, decrypt: subtle.decrypt };
+    subtle.encrypt = function(...args) {
+      window.fixtureCrypto.encryptArgs = args;
+      const promise = Reflect.apply(window.fixtureCrypto.encrypt, this, args);
+      window.fixtureCrypto.encryptPromise = promise; return promise;
+    };
+    subtle.decrypt = function(...args) {
+      window.fixtureCrypto.decryptArgs = args;
+      const promise = Reflect.apply(window.fixtureCrypto.decrypt, this, args);
+      window.fixtureCrypto.decryptPromise = promise; return promise;
+    };
+    window.fixtureCrypto.encryptSpy = subtle.encrypt;
+    window.fixtureCrypto.decryptSpy = subtle.decrypt;
+  });
+  await page.addScriptTag({ content: protocolObserverScript({ origin, token: 'local-test-token' }) });
+  const cryptoCheck = await page.evaluate(async () => {
+    const subtle = crypto.subtle, saved = window.fixtureCrypto;
+    const key = await subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    const algorithm = { name: 'AES-GCM', iv: new Uint8Array(12) };
+    const plaintext = new TextEncoder().encode(JSON.stringify({ type: 'register', authToken: 'local-test-token' }));
+    const original = plaintext.slice(), iv = algorithm.iv.slice();
+    const expected = await Reflect.apply(saved.encrypt, subtle, [algorithm, key, plaintext]);
+    const encryptedPromise = subtle.encrypt(algorithm, key, plaintext);
+    const sameEncryptPromise = encryptedPromise === saved.encryptPromise;
+    const sameArguments = saved.encryptArgs[0] === algorithm && saved.encryptArgs[1] === key && saved.encryptArgs[2] === plaintext;
+    const encrypted = await encryptedPromise;
+    const decryptedPromise = subtle.decrypt(algorithm, key, encrypted);
+    const sameDecryptPromise = decryptedPromise === saved.decryptPromise;
+    const decrypted = await decryptedPromise;
+    const bytesEqual = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
+    for (const body of [{ type: 'register', authToken: 'different-fixture-token' }, { type: 'scan-for-peer', token: null },
+      { type: 'scan-for-peer', token: 'fixture-private-captcha' }]) {
+      await subtle.encrypt(algorithm, key, new TextEncoder().encode(JSON.stringify(body)));
+    }
+    const encodeReply = body => Reflect.apply(saved.encrypt, subtle, [algorithm, key, new TextEncoder().encode(JSON.stringify(body))]);
+    await subtle.decrypt(algorithm, key, await encodeReply({ type: 'registered', success: true }));
+    const rejectedPromise = subtle.decrypt(algorithm, key, new Uint8Array([1, 2]));
+    const sameRejectedPromise = rejectedPromise === saved.decryptPromise;
+    let rejection;
+    try { await rejectedPromise; } catch (error) { rejection = error.name; }
+    await subtle.decrypt(algorithm, key, await encodeReply({ type: 'captcha-request', privateValue: 'fixture-private-response' }));
+    return {
+      sameEncryptPromise, sameDecryptPromise, sameRejectedPromise, sameArguments,
+      ciphertextMatches: bytesEqual(new Uint8Array(expected), new Uint8Array(encrypted)),
+      plaintextMatches: bytesEqual(original, new Uint8Array(decrypted)),
+      inputUnchanged: bytesEqual(original, plaintext), ivUnchanged: bytesEqual(iv, algorithm.iv),
+      rejection, restored: subtle.encrypt === saved.encryptSpy && subtle.decrypt === saved.decryptSpy,
+    };
+  });
+  assert.deepEqual(cryptoCheck, { sameEncryptPromise: true, sameDecryptPromise: true, sameRejectedPromise: true,
+    sameArguments: true, ciphertextMatches: true, plaintextMatches: true, inputUnchanged: true, ivUnchanged: true,
+    rejection: 'OperationError', restored: true });
+  for (let i = 0; i < 50 && !diagnosticReports.some(report => report.event === 'nekto_protocol' && report.type === 'captcha-request'); i++) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  const protocolReports = diagnosticReports.filter(report => report.event === 'nekto_protocol');
+  assert(protocolReports.some(report => report.type === 'register' && report.credentialMatches === true));
+  assert(protocolReports.some(report => report.type === 'register' && report.credentialMatches === false));
+  assert(protocolReports.some(report => report.type === 'registered' && report.success === 'true'));
+  assert(protocolReports.some(report => report.type === 'scan-for-peer' && report.searchToken === 'null'));
+  assert(protocolReports.some(report => report.type === 'scan-for-peer' && report.searchToken === 'present'));
+  for (const secret of ['local-test-token', 'different-fixture-token', 'fixture-private-captcha', 'fixture-private-response']) {
+    assert(!JSON.stringify(protocolReports).includes(secret));
+  }
+  await page.evaluate(() => {
+    crypto.subtle.encrypt = window.fixtureCrypto.encrypt;
+    crypto.subtle.decrypt = window.fixtureCrypto.decrypt;
+    delete window.fixtureCrypto;
+  });
   const child = await page.evaluate(() => new Promise(resolve => {
     const frame = document.createElement('iframe'); frame.src = '/frame';
     frame.onload = () => resolve(frame.contentWindow.tokenAtFirstScript); document.body.append(frame);
@@ -357,7 +433,7 @@ try {
   const replaced = await context.newPage(); await replaced.goto(origin);
   assert.equal(await replaced.evaluate(() => window.tokenAtFirstScript), 'replacement-test-token');
   assert.equal(await replaced.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).settings.theme), 'fixture-theme');
-  console.log('Browser integration passed: native microphone APIs unchanged; live silent WAV capture across loops; modern and legacy permission paths; stale profile lock recovery with preserved settings; read-only Vuex flag transitions and failed HTTP/CAPTCHA request tracing; real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; repeated join; two native next calls with Kazakh links and styled Russian controls; fading confirmation; cookie controls untouched; private diagnostics; restrictions; microphone; WebRTC PCM; missed track recovery; cleanup.');
+  console.log('Browser integration passed: native AES-GCM ciphertext and exact Promise preservation; credential equality without secrets; native challenge observation and observer cleanup; native microphone APIs unchanged; live silent WAV capture across loops; modern and legacy permission paths; stale profile lock recovery with preserved settings; read-only Vuex flag transitions and failed HTTP/CAPTCHA request tracing; real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; repeated join; two native next calls with Kazakh links and styled Russian controls; fading confirmation; cookie controls untouched; private diagnostics; restrictions; microphone; WebRTC PCM; missed track recovery; cleanup.');
 } finally {
   await context?.close();
   await new Promise(resolve => server.close(resolve));
