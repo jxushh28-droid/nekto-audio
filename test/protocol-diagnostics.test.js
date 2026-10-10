@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { NektoBrowser } from '../src/nekto.js';
 import { describeProtocolMessage, sanitizeProtocolReport, updateProtocolSummary } from '../src/protocol-diagnostics.js';
 
 test('native registration reports exact credential equality without exposing credentials', () => {
@@ -46,4 +47,11 @@ test('status summary separates observed input from server reply and challenge', 
   summary = updateProtocolSummary(summary, { direction: 'decrypt', type: 'captcha-request' });
   assert.deepEqual(summary, { registrationPayloadObserved: true, credentialField: 'authToken', credentialMatches: true,
     registrationReplyObserved: true, registrationSuccess: 'true', searchToken: 'null', captchaRequested: true });
+});
+
+test('stopping or replacing a session clears its credential observations', async () => {
+  const browser = new NektoBrowser(() => {});
+  browser.protocolDiagnostics = { registrationPayloadObserved: true, credentialMatches: true };
+  await browser.stop();
+  assert.equal(browser.protocolDiagnostics, null);
 });

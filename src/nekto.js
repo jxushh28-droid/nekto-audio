@@ -300,6 +300,7 @@ export class NektoBrowser {
     this.stopSessionMonitor();
     this.generation++;
     this.forwarding = false;
+    this.protocolDiagnostics = null;
     const context = this.context;
     this.page = null; this.context = null;
     this.browser = null;
