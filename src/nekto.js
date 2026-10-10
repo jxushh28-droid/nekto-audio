@@ -1,14 +1,16 @@
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { installBrowserRelay, inspectBrowserMicrophone } from './browser-init.js';
+import { installAntiDetect } from './anti-detect.js';
 import { searchError } from './search-error.js';
 import { audioClientReady, confirmAudioToken, authorizationError } from './live-session.js';
 import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
-import { writeTokenExtension, extensionBrowserOptions, generateFingerprint } from './token-extension.js';
+import { writeTokenExtension, extensionBrowserOptions, generateFingerprint, fpSeed } from './token-extension.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
 import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificationReport } from './network-diagnostics.js';
@@ -134,6 +136,13 @@ export class NektoBrowser {
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
       });
       await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
+      // Anti-detection: FPT hash bypass + WebGL/Canvas/WebGPU/Client Hints spoof + tab-conflict auto-click.
+      // fptHash = md5(token) → stable per-token device identity on nekto's server (prevents ban cross-contamination).
+      // fpSeed  = FNV-1a(token) → LCG seed for canvas pixel noise (breaks FingerprintJS cross-slot correlation).
+      await page.addInitScript(installAntiDetect, {
+        fptHash: createHash('md5').update(token || '').digest('hex'),
+        fpSeed: fpSeed(token || ''),
+      });
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       stage = 'load';
       const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });

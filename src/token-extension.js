@@ -54,6 +54,19 @@ export function generateFingerprint(token) {
   };
 }
 
+/**
+ * FNV-1a 32-bit hash of the token — used as LCG seed for canvas noise.
+ * Must match the fpSeed() function in the TS source (inject.ts / NektoBrowserClient.ts).
+ */
+export function fpSeed(token) {
+  let h = 2166136261;
+  for (let i = 0; i < token.length; i++) {
+    h ^= token.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h || 1;
+}
+
 /** Builds an IIFE that overrides navigator/screen/Intl properties before the page runs. */
 function fingerprintSpoofScript(fp) {
   const data = JSON.stringify(fp);
