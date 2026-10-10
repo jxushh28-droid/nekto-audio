@@ -150,7 +150,8 @@ export class NektoBrowser {
           // searching is confirmed (finishSearch already returned), the session stays up and
           // may still route a partner.
           if (report.direction === 'decrypt' && report.type === 'captcha-request') {
-            console.log(JSON.stringify({ event: 'nekto_captcha_request_received', action: 'session_continues' }));
+            console.log(JSON.stringify({ event: 'nekto_captcha_request_received', action: 'session_continues',
+              captchaVariant: report.captchaVariant || 'unknown', captchaFields: report.captchaFields || '' }));
           }
         },
       });
@@ -168,13 +169,25 @@ export class NektoBrowser {
       });
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       stage = 'load';
-      // Clear all cookies from the nekto domain before each session.
-      // The persistent profile accumulates cookies that the server uses to identify
-      // and track sessions server-side. Even when the token changes, stale cookies
-      // can keep the server associating this context with a flagged session.
-      // Clearing cookies here gives every openSession() call a clean slate while
-      // still preserving extension state and any other per-profile data.
+      // Clear all cookies AND domain storage from nekto before each session.
+      // The persistent profile accumulates localStorage, IndexedDB and cookies that
+      // the server uses to track and flag sessions across restarts. Even when the token
+      // changes, stale storage can keep associating this context with a flagged session.
+      // CDP Storage.clearDataForOrigin wipes localStorage + IndexedDB + service workers
+      // for the origin BEFORE any navigation, so the extension re-injects the token and
+      // cookiesAccepted flag into a completely clean slate at document_start.
       await context.clearCookies({ domain: 'nekto-me.kz' }).catch(() => {});
+      try {
+        const cdp = await context.newCDPSession(page);
+        await cdp.send('Storage.clearDataForOrigin', {
+          origin: 'https://nekto-me.kz',
+          storageTypes: 'local_storage,indexeddb,service_workers,cache_storage',
+        });
+        await cdp.detach();
+        console.log(JSON.stringify({ event: 'nekto_domain_storage_cleared' }));
+      } catch (clearErr) {
+        console.log(JSON.stringify({ event: 'nekto_domain_storage_clear_failed', error: String(clearErr) }));
+      }
       check();
       const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
       if (response && response.status() >= 400) throw searchError('load');

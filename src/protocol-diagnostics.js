@@ -24,6 +24,16 @@ export function describeProtocolMessage(plaintext, token, direction) {
   if (message.type === 'registered') {
     report.success = message.success === true ? 'true' : message.success === false ? 'false' : 'unspecified';
   }
+  if (message.type === 'captcha-request') {
+    // Capture which captcha variant the server requested so we can see it in Railway logs.
+    // Only log the variant string; never log site keys or full message bodies.
+    const variant = typeof message.captchaType === 'string' ? message.captchaType :
+      typeof message.variant === 'string' ? message.variant :
+      message.recaptcha ? 'recaptcha' : message.hcaptcha ? 'hcaptcha' : 'unknown';
+    report.captchaVariant = variant.slice(0, 32);
+    // Log which top-level keys were present (without values) for protocol archaeology.
+    report.captchaFields = Object.keys(message).filter(k => k !== 'type').slice(0, 16).join(',');
+  }
   return report;
 }
 
@@ -42,6 +52,12 @@ export function sanitizeProtocolReport(report) {
     ['missing', 'null', 'empty', 'present', 'other'].includes(report.searchToken) ? report.searchToken : 'other';
   if (report.type === 'registered') safe.success =
     ['true', 'false', 'unspecified'].includes(report.success) ? report.success : 'unspecified';
+  if (report.type === 'captcha-request') {
+    safe.captchaVariant = typeof report.captchaVariant === 'string' ?
+      report.captchaVariant.slice(0, 32) : 'unknown';
+    safe.captchaFields = typeof report.captchaFields === 'string' ?
+      report.captchaFields.slice(0, 256) : '';
+  }
   return safe;
 }
 
