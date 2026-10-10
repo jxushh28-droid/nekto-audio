@@ -54,6 +54,10 @@ export async function advanceAudioCall(page, { check = () => {}, authorize, endC
           if (!confirmed) {
             const yes = await control(popup, confirmEndName);
             check(); await yes.click({ timeout: 5000 }); check(); confirmed = true;
+            // Read state immediately after confirming — avoids relying on the
+            // do…while condition being checked before the deadline expires.
+            state = await page.evaluate(readAudioCallState); check();
+            if (!state.partnerConnected && !state.attention) break;
           }
           // The native popup may remain visible during its closing animation.
           // Wait for it to disappear without answering the same prompt twice.
