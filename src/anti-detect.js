@@ -104,37 +104,6 @@ export function installAntiDetect({ fptHash, fpSeed }) {
     } catch (_) {}
   }
 
-  // ── 1b. Suppress captcha-request WS event via crypto.subtle.decrypt hook ───
-  // nekto sends captcha-request as an encrypted WS frame. After decryption the
-  // payload JSON reaches the Vue store and sets captchaRequired = true, which
-  // makes the bot throw NEKTO_VERIFICATION and stop.
-  // Hooking decrypt lets us inspect the plaintext before it hits Vue and replace
-  // the captcha-request payload with a harmless pong so the store never flips.
-  if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const _dec = crypto.subtle.decrypt.bind(crypto.subtle);
-    const patchedDecrypt = async function(algo, key, data) {
-      const result = await _dec(algo, key, data);
-      try {
-        const text = new TextDecoder('utf-8', { fatal: false }).decode(result);
-        if (text.includes('captcha')) {
-          try {
-            const obj = JSON.parse(text);
-            if (obj && typeof obj.type === 'string' && obj.type.includes('captcha')) {
-              // Replace with harmless pong — Vue store never sets captchaRequired
-              return new TextEncoder().encode(JSON.stringify({ type: 'pong' })).buffer;
-            }
-          } catch (_) {}
-        }
-      } catch (_) {}
-      return result;
-    };
-    try {
-      Object.defineProperty(crypto.subtle, 'decrypt', {
-        value: patchedDecrypt, writable: true, configurable: true, enumerable: true,
-      });
-    } catch (_) {}
-  }
-
   // ── 2. WebGL GPU spoof ──────────────────────────────────────────────────────
   const GL_VENDOR          = 0x1F00;
   const GL_RENDERER        = 0x1F01;

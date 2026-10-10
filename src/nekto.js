@@ -129,7 +129,17 @@ export class NektoBrowser {
       this.page = page;
       await attachNektoDiagnostics(page, token, {
         current: () => generation === this.generation && this.page === page,
-        onProtocol: report => { this.protocolDiagnostics = updateProtocolSummary(this.protocolDiagnostics, report); },
+        onProtocol: report => {
+          this.protocolDiagnostics = updateProtocolSummary(this.protocolDiagnostics, report);
+          // When the server sends captcha-request, it stops routing partners until a solution
+          // is received. Instead of staying stuck in the searching state indefinitely, restart
+          // the session quickly so we get a fresh connection that may not be challenged.
+          if (report.direction === 'decrypt' && report.type === 'captcha-request' &&
+              generation === this.generation && this.page === page) {
+            console.log(JSON.stringify({ event: 'nekto_captcha_request_received', action: 'restarting_session' }));
+            setImmediate(() => { if (generation === this.generation) this.stop().catch(() => {}); });
+          }
+        },
       });
       await page.exposeBinding('pushNektoAudio', ({ frame }, base64) => {
         if (this.forwarding && generation === this.generation && frame === page.mainFrame() &&
