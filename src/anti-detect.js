@@ -70,12 +70,16 @@ export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
     }
   } catch (_) {}
 
-  // ── 1. FPT hash bypass ──────────────────────────────────────────────────────
-  // nekto encrypts WS frames with WebCrypto. The "set-fpt" event carries a
-  // FingerprintJS visitorId (fpt field) that nekto uses as device identity for
-  // shadow/phantom bans. We swap it with md5(token) so every token has its own
-  // stable device id and bans never cross-contaminate between slots.
-  if (fptHash && typeof crypto !== 'undefined' && crypto.subtle) {
+  // ── 1. WS payload patching (WebCrypto encrypt hook) ────────────────────────
+  // nekto encrypts outgoing WS frames with crypto.subtle.encrypt (AES-GCM).
+  // We intercept here to patch gumHash, strip bot-detectable fields, and
+  // clean deviceInfo before the plaintext is encrypted and sent.
+  //
+  // NOTE: fpt is intentionally NOT replaced. Each slot runs its own persistent
+  // browser profile, so FingerprintJS produces a unique visitorId per slot.
+  // Replacing fpt would mismatch with the AES-CBC signature in `infoDataS`
+  // (keyed on the original fpt) and trigger an instant ban.
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
     const _enc = crypto.subtle.encrypt.bind(crypto.subtle);
     const patched = async function(algo, key, data) {
       try {
@@ -89,15 +93,13 @@ export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
             try {
               const obj = JSON.parse(text);
               if (obj && typeof obj === 'object') {
-                // 1. Replace FPT hash with per-token stable id (prevents cross-slot ban contamination).
-                //    CRITICAL: Do NOT replace fpt when type === 'set-fpt'.
-                //    The set-fpt message includes `infoDataS` which is AES-CBC encrypted using
-                //    key = (original_fpt + authToken + tokenId). If we replace fpt here the server
-                //    reconstructs a different key, decryption fails, and the account gets shadow-banned.
-                //    fpt replacement is only needed in the 'register' message (WS envelope payload).
-                if (fptHash && typeof obj.fpt === 'string' && obj.fpt !== fptHash && obj.type !== 'set-fpt') {
-                  obj.fpt = fptHash;
-                }
+                // 1. FPT: do NOT replace. Each slot has its own persistent browser profile
+                //    (launchPersistentContext with a per-slot profilePath), so FingerprintJS
+                //    naturally generates a unique visitorId per slot — no cross-contamination.
+                //    Replacing fpt causes a mismatch: 'register' would send fake fpt but
+                //    'set-fpt' carries infoDataS = AES-CBC(components, key=real_fpt+authToken+tokenId).
+                //    Server correlates the fpt values across both messages; any mismatch
+                //    triggers an instant ban. Leave fpt alone in all messages.
 
                 // 2. Replace gumHash — nekto computes this from the getUserMedia audio stream.
                 //    With --use-fake-device-for-media-stream the hash is a bot fingerprint.
