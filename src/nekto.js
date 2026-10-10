@@ -98,7 +98,7 @@ export class NektoBrowser {
     // Spoof Origin to match what a real browser user on nekto.me sends.
     // ModHeader does the same thing for manual users — without it nekto's server
     // sees the wrong origin on WebSocket upgrade requests and throws captcha-request.
-    await context.setExtraHTTPHeaders({ 'origin': 'https://nekto.me' });
+    await context.setExtraHTTPHeaders({ 'origin': 'https://nekto-me.kz' });
     this.context = context; this.browser = context.browser();
     return context;
   }
