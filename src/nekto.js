@@ -382,6 +382,11 @@ export class NektoBrowser {
       audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
     return { ...status, protocolDiagnostics: this.protocolDiagnostics, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
+  async screenshot() {
+    const page = this.page;
+    if (!page || page.isClosed()) return null;
+    return page.screenshot({ type: 'jpeg', quality: 80, fullPage: false });
+  }
   async stop() {
     this.stopSessionMonitor();
     this.generation++;

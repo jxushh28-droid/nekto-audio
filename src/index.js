@@ -187,6 +187,10 @@ h1{font-size:18px;font-weight:600;color:#fff;margin-bottom:16px;letter-spacing:.
 <h1>nekto-audio <span id="ts">—</span></h1>
 <div id="err"></div>
 <div class="grid" id="grid"></div>
+<div style="margin-top:16px">
+  <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#555;margin-bottom:8px">Browser view</div>
+  <img id="shot" src="/screenshot" style="width:100%;max-width:900px;border-radius:6px;border:1px solid #222;display:block" alt="browser view">
+</div>
 <script>
 const dot=c=>'<span class="dot"></span>';
 const badge=(v,cls)=>'<span class="badge badge-'+cls+'">'+v+'</span>';
@@ -265,7 +269,8 @@ function render(d){
   ];
   document.getElementById('grid').innerHTML=cards.join('');
 }
-poll();setInterval(poll,1500);
+function refreshShot(){const img=document.getElementById('shot');img.src='/screenshot?t='+Date.now();}
+poll();setInterval(poll,1500);setInterval(refreshShot,2000);
 </script></body></html>`;
 
 const server = http.createServer(async (request, response) => {
@@ -306,6 +311,15 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(503, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ error: 'status unavailable' }));
     }
+    return;
+  }
+  if (request.url === '/screenshot') {
+    try {
+      const img = await browser.screenshot();
+      if (!img) { response.writeHead(503); response.end('no page'); return; }
+      response.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' });
+      response.end(img);
+    } catch { response.writeHead(503); response.end('screenshot failed'); }
     return;
   }
   if (request.url === '/' || request.url === '/panel') {
