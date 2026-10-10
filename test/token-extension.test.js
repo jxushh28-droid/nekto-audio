@@ -11,7 +11,7 @@ test('extension preserves existing settings and skips an already matching token'
   const context = { localStorage: { getItem: () => saved, setItem: (_, value) => { writes++; saved = value; } },
     document: { addEventListener() { throw Error('Unexpected retry'); } } };
   vm.runInNewContext(tokenExtensionScript('next-token'), context);
-  assert.deepEqual(JSON.parse(saved), { settings: { theme: 'dark' }, user: { authToken: 'next-token', openChats: 6 } });
+  assert.deepEqual(JSON.parse(saved), { settings: { theme: 'dark', cookiesAccepted: true }, user: { authToken: 'next-token', openChats: 6 } });
   vm.runInNewContext(tokenExtensionScript('next-token'), context);
   assert.equal(writes, 1);
 });

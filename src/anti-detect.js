@@ -223,14 +223,13 @@ export function installAntiDetect({ fptHash, fpSeed }) {
     }
   } catch (_) {}
 
-  // ── 6. Cookie banner CSS + tab-conflict auto-click ──────────────────────────
-  // Hide nekto's cookie consent immediately to avoid it blocking the UI.
-  try {
-    const css = '.cookies-consent,.cookie-consent,[class*="cookie"],[class*="Cookie"]{display:none!important;visibility:hidden!important;pointer-events:none!important;}';
-    const s = document.createElement('style');
-    s.textContent = css;
-    (document.head || document.documentElement).appendChild(s);
-  } catch (_) {}
+  // ── 6. Tab-conflict auto-click ───────────────────────────────────────────────
+  // NOTE: Do NOT hide the cookie banner with CSS. Nekto's server sees the WS
+  // connection and checks whether cookies were accepted (via a flag in its Vue
+  // store / localStorage). Hiding the button with CSS bypasses the click without
+  // firing the acceptance event → server sends captcha-request.
+  // The proper fix is to click #acceptCookies via Playwright BEFORE this init
+  // script matters; see nekto.js openSession().
 
   // nekto shows a "Да / Нет" modal when another tab already holds the authToken.
   // Auto-click "Да" to let this tab take over (matches old TS inject.ts behavior).

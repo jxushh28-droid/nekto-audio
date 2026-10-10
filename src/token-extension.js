@@ -108,6 +108,15 @@ export function tokenExtensionScript(token) {
       if (saved?.user?.authToken === TOKEN) return true;
       saved.user = saved.user || {};
       saved.user.authToken = TOKEN;
+      // Pre-accept cookies so nekto's Vue app never enters the captcha-triggering
+      // state where WS connects before the cookie consent flag is set.
+      // Nekto stores acceptance under settings.cookiesAccepted inside the same key.
+      // Pre-accept cookies — nekto reads this flag from its own storage key to
+      // decide whether to show the consent modal and whether the WS client is
+      // "trusted". Setting it here at document_start prevents the server from
+      // receiving a connection that looks like a fresh/bot session.
+      saved.settings = saved.settings || {};
+      saved.settings.cookiesAccepted = true;
       localStorage.setItem(KEY, JSON.stringify(saved));
       return true;
     } catch { return false; }

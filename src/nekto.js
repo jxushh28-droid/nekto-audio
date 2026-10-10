@@ -150,6 +150,19 @@ export class NektoBrowser {
       this.microphone = await page.evaluate(inspectBrowserMicrophone);
       check();
       if (this.microphone.permission !== 'granted' || !this.microphone.inputs) throw searchError('microphone');
+      // Click the cookie consent button if it's still visible.
+      // Nekto's server triggers captcha-request when WS connects without the
+      // cookiesAccepted flag being set in Vue state. The extension pre-sets the
+      // localStorage value, but clicking the button also fires nekto's Vue
+      // mutation so the in-memory state matches — covering both paths.
+      try {
+        const cookieBtn = page.locator('#acceptCookies');
+        if (await cookieBtn.isVisible({ timeout: 2500 })) {
+          await cookieBtn.click({ timeout: 3000 });
+          console.log(JSON.stringify({ event: 'nekto_cookies_accepted' }));
+        }
+      } catch (_) {}
+      check();
       stage = 'authorize';
       try { await page.waitForFunction(audioClientReady, null, { timeout: 20000 }); }
       catch {
