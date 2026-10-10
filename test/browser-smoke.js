@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
@@ -13,6 +13,8 @@ import { writeTokenExtension, extensionBrowserOptions } from '../src/token-exten
 import { waitForStartControl, inspectStartControls } from '../src/start-controls.js';
 
 import { attachNektoDiagnostics, installVerificationObserver } from '../src/network-diagnostics.js';
+
+import { recoverRailwayProfileLock } from '../src/profile-lock.js';
 
 // Local-only integration test: real Chromium/WebRTC/WebAudio, no Nekto call or Discord login.
 const server = http.createServer((request, response) => {
@@ -307,6 +309,8 @@ try {
     localStorage.setItem('storage_audio_v2', JSON.stringify(saved));
   });
   await context.close(); context = null;
+  await symlink('fixture-previous-container-12345', join(profilePath, 'SingletonLock'));
+  assert.equal(await recoverRailwayProfileLock(profilePath, { railwayRuntime: true, expectedDirectory: profilePath }), true);
   await writeTokenExtension(extensionPath, 'replacement-test-token', { matches: ['http://127.0.0.1/*'] });
   context = await chromium.launchPersistentContext(profilePath, {
     ...extensionBrowserOptions(extensionPath), executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
@@ -314,7 +318,7 @@ try {
   const replaced = await context.newPage(); await replaced.goto(origin);
   assert.equal(await replaced.evaluate(() => window.tokenAtFirstScript), 'replacement-test-token');
   assert.equal(await replaced.evaluate(() => JSON.parse(localStorage.getItem('storage_audio_v2')).settings.theme), 'fixture-theme');
-  console.log('Browser integration passed: read-only Vuex flag transitions and failed HTTP/CAPTCHA request tracing; real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; repeated join; two native next calls with Kazakh links and styled Russian controls; fading confirmation; cookie controls untouched; private diagnostics; restrictions; microphone; WebRTC PCM; missed track recovery; cleanup.');
+  console.log('Browser integration passed: stale profile lock recovery with preserved settings; read-only Vuex flag transitions and failed HTTP/CAPTCHA request tracing; real MV3 extension at document_start; all_frames; origin scope; runtime token replacement; persistent settings; repeated join; two native next calls with Kazakh links and styled Russian controls; fading confirmation; cookie controls untouched; private diagnostics; restrictions; microphone; WebRTC PCM; missed track recovery; cleanup.');
 } finally {
   await context?.close();
   await new Promise(resolve => server.close(resolve));

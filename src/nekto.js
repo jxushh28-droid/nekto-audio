@@ -13,6 +13,8 @@ import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
 import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificationReport } from './network-diagnostics.js';
 
+import { isProfileLockError, recoverRailwayProfileLock } from './profile-lock.js';
+
 export const NEKTO_URL = 'https://nekto-me.kz/audiochat#/';
 
 export class NektoBrowser {
@@ -74,7 +76,13 @@ export class NektoBrowser {
     if (this.context) return this.context;
     await writeTokenExtension(this.extensionPath, token);
     await mkdir(this.profilePath, { recursive: true, mode: 0o700 });
-    const context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath));
+    let context;
+    try { context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath)); }
+    catch (error) {
+      if (!isProfileLockError(error) || !await recoverRailwayProfileLock(this.profilePath)) throw error;
+      console.log(JSON.stringify({ event: 'nekto_profile_lock_recovered' }));
+      context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath));
+    }
     this.context = context; this.browser = context.browser();
     return context;
   }
