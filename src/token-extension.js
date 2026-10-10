@@ -58,6 +58,7 @@ export function generateFingerprint(token) {
 function fingerprintSpoofScript(fp) {
   const data = JSON.stringify(fp);
   return `(function(){
+  if(typeof navigator==='undefined'||typeof screen==='undefined')return;
   var fp=${data};
   function def(obj,prop,val){try{Object.defineProperty(obj,prop,{get:function(){return val;},configurable:true});}catch(e){}}
   def(navigator,'platform',fp.platform);
