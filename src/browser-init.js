@@ -154,6 +154,14 @@ export function installBrowserRelay({ origin }) {
       });
       peer.addEventListener('connectionstatechange', () => cleanup(peer));
     };
+    // Keep the OUTGOING mic track enabled. nekto flags a peer-mute if the local
+    // audio track is disabled/muted — the reference (inject.ts) force-enables it
+    // on addTrack and re-asserts every 2s. Ported here as a prototype patch.
+    const forceLocal = (track) => {
+      if (!track || track.kind !== 'audio') return;
+      try { track.enabled = true; } catch (_) {}
+      try { setInterval(() => { try { track.enabled = true; } catch (_) {} }, 2000); } catch (_) {}
+    };
     // Patch prototype methods in place. These wrappers are plain functions; the
     // fingerprint only native-checks the constructor, getUserMedia and localStorage.getItem.
     const patch = (name) => {
@@ -166,6 +174,14 @@ export function installBrowserRelay({ origin }) {
     };
     patch('setLocalDescription');
     patch('setRemoteDescription');
+    // addTrack: register peer + force-enable the outgoing track.
+    const origAddTrack = RTC.prototype.addTrack;
+    if (typeof origAddTrack === 'function') {
+      RTC.prototype.addTrack = function(track, ...streams) {
+        try { registerPeer(this); forceLocal(track); } catch (_) {}
+        return origAddTrack.call(this, track, ...streams);
+      };
+    }
   }
 }
 

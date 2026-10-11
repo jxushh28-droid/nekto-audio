@@ -161,14 +161,16 @@ export class NektoBrowser {
       });
       await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
       // Token + fingerprint injection (replaces the Chrome extension approach).
-      // tokenExtensionScript writes authToken + cookiesAccepted to localStorage at
-      // document_start and applies navigator/screen/Intl spoof overrides.
+      // tokenExtensionScript writes authToken to localStorage at document_start and
+      // applies navigator/screen/Intl spoof overrides.
       await page.addInitScript({ content: tokenExtensionScript(token) });
-      // Anti-detection: WebGL/Canvas/WebGPU/Client Hints spoof + gumHash bypass + tab-conflict auto-click.
-      // fpSeed  = FNV-1a(token) → LCG seed for canvas pixel noise (stable per token, different per token).
-      // gumHash = sha256(token+'gum') → replaces the getUserMedia stream hash (fake mic produces bot hash).
+      // Anti-detection ported from the proven reference (inject.ts):
+      //   fptHash = md5(token) → swap the FingerprintJS visitorId on every WS frame so
+      //     each token is its own stable device (device bans don't carry across tokens).
+      //   fpSeed  = FNV-1a(token) → LCG seed for canvas pixel noise (stable per token).
+      // gumHash kept for compatibility but no longer used by the simplified hook.
       await page.addInitScript(installAntiDetect, {
-        fptHash: null, // fpt is NOT replaced — incognito context gives a fresh FingerprintJS ID each session
+        fptHash: createHash('md5').update(token || '').digest('hex'),
         fpSeed: fpSeed(token || ''),
         gumHash: createHash('sha256').update((token || '') + '-gum').digest('hex'),
       });

@@ -70,69 +70,40 @@ export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
     }
   } catch (_) {}
 
-  // ── 1. WS payload patching (WebCrypto encrypt hook) ────────────────────────
-  // nekto encrypts outgoing WS frames with crypto.subtle.encrypt (AES-GCM).
-  // We intercept here to patch gumHash, strip bot-detectable fields, and
-  // clean deviceInfo before the plaintext is encrypted and sent.
+  // ── 1. FPT spoof (WebCrypto encrypt hook) ──────────────────────────────────
+  // Ported verbatim from the proven reference (inject.ts). nekto encrypts every
+  // outgoing WS frame with crypto.subtle.encrypt (AES-GCM). We intercept, and if
+  // the plaintext carries an `fpt` field (FingerprintJS visitorId) we swap it for
+  // md5(token).
   //
-  // NOTE: fpt is intentionally NOT replaced. Each slot runs its own persistent
-  // browser profile, so FingerprintJS produces a unique visitorId per slot.
-  // Replacing fpt would mismatch with the AES-CBC signature in `infoDataS`
-  // (keyed on the original fpt) and trigger an instant ban.
-  if (typeof crypto !== 'undefined' && crypto.subtle) {
+  // WHY: nekto hangs a shadow/phantom ban on the DEVICE (fpt), not the token. The
+  // machine's real visitorId is stable across token changes (our fingerprint spoof
+  // is deterministic), so a new token on the same machine reuses the same real fpt
+  // and inherits the flagged device → captcha on every new token. md5(token) gives
+  // each token its own stable device identity, so bans never carry across tokens.
+  //
+  // Applied UNIFORMLY to all messages (register, set-fpt, scan-for-peer) so the fpt
+  // is internally consistent. We do NOT touch anything else (gumHash, canvas,
+  // plugins, duration, deviceInfo) — the reference leaves them intact and works;
+  // stripping fields the server expects is itself a bot tell.
+  if (fptHash && typeof crypto !== 'undefined' && crypto.subtle) {
     const _enc = crypto.subtle.encrypt.bind(crypto.subtle);
+    const td = new TextDecoder();
     const patched = async function(algo, key, data) {
+      let out = data;
       try {
         let buf;
         if (data instanceof ArrayBuffer) buf = data;
         else if (ArrayBuffer.isView(data)) buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
         if (buf) {
-          const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
-          if (text.includes('"fpt"') || text.includes('"deviceInfo"') || text.includes('"canvas"') ||
-              text.includes('"gumHash"') || text.includes('"type"') && text.includes('"register"')) {
-            try {
-              const obj = JSON.parse(text);
-              if (obj && typeof obj === 'object') {
-                // 1. FPT: do NOT replace. Each slot has its own persistent browser profile
-                //    (launchPersistentContext with a per-slot profilePath), so FingerprintJS
-                //    naturally generates a unique visitorId per slot — no cross-contamination.
-                //    Replacing fpt causes a mismatch: 'register' would send fake fpt but
-                //    'set-fpt' carries infoDataS = AES-CBC(components, key=real_fpt+authToken+tokenId).
-                //    Server correlates the fpt values across both messages; any mismatch
-                //    triggers an instant ban. Leave fpt alone in all messages.
-
-                // 2. Replace gumHash — nekto computes this from the getUserMedia audio stream.
-                //    With --use-fake-device-for-media-stream the hash is a bot fingerprint.
-                //    Replace with SHA-256(token)-derived value: stable per token, looks real.
-                if (gumHash && typeof obj.gumHash === 'string') obj.gumHash = gumHash;
-
-                // 3. Remove canvas / plugins / duration — top-level bot-detection fields.
-                //    These components expose automation even with spoofed values and are
-                //    flagged by the server's shadow-ban logic (per bundle analysis).
-                delete obj.canvas;
-                delete obj.plugins;
-                delete obj.duration;
-
-                // 4. Strip `ua` from deviceInfo (UAParser result).
-                //    nekto's own code does `delete t.ua` before sending device info;
-                //    if we don't match this, the field mismatch triggers VPGEN failure.
-                if (obj.deviceInfo && typeof obj.deviceInfo === 'object') {
-                  delete obj.deviceInfo.ua;
-                  delete obj.deviceInfo['user-agent'];
-                }
-
-                // 5. Same cleanup on nested webglInfo.components if present
-                if (obj.webglInfo && obj.webglInfo.components) {
-                  delete obj.webglInfo.components.canvas;
-                }
-
-                data = new TextEncoder().encode(JSON.stringify(obj));
-              }
-            } catch (_) {}
+          const obj = JSON.parse(td.decode(buf));
+          if (obj && typeof obj.fpt === 'string' && obj.fpt !== fptHash) {
+            obj.fpt = fptHash;
+            out = new TextEncoder().encode(JSON.stringify(obj));
           }
         }
       } catch (_) {}
-      return _enc(algo, key, data);
+      return _enc(algo, key, out);
     };
     try {
       Object.defineProperty(crypto.subtle, 'encrypt', {
@@ -260,40 +231,38 @@ export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
     }
   } catch (_) {}
 
-  // ── 6. Tab-conflict auto-click ───────────────────────────────────────────────
-  // NOTE: Do NOT hide the cookie banner with CSS. Nekto's server sees the WS
-  // connection and checks whether cookies were accepted (via a flag in its Vue
-  // store / localStorage). Hiding the button with CSS bypasses the click without
-  // firing the acceptance event → server sends captcha-request.
-  // The proper fix is to click #acceptCookies via Playwright BEFORE this init
-  // script matters; see nekto.js openSession().
-
-  // nekto shows a "Да / Нет" modal when another tab already holds the authToken.
-  // Auto-click "Да" to let this tab take over (matches old TS inject.ts behavior).
+  // ── 6. Cookie banner + tab-conflict (ported verbatim from reference inject.ts) ─
+  // The reference hides the cookie-consent banner with CSS (it's a notice, not a
+  // functional gate) AND clicks the accept button, then auto-accepts the
+  // "already open in another tab" modal by clicking "Да".
   try {
-    const TAB_CONFLICT_SELECTORS = [
-      // nekto-specific conflict dialog buttons
-      'button[data-action="continue"]',
-      '.modal button:first-of-type',
-    ];
-    const CONFIRM_TEXTS = ['да', 'yes', 'ок', 'ok', 'continue', 'продолжить'];
+    const st = document.createElement('style');
+    st.textContent = '.cookies-consent{display:none!important}';
+    (document.head || document.documentElement).appendChild(st);
+  } catch (_) {}
 
-    const tryClickConflict = () => {
-      try {
-        const buttons = document.querySelectorAll('button');
-        for (const btn of buttons) {
-          const text = (btn.textContent || '').trim().toLowerCase();
-          if (!CONFIRM_TEXTS.includes(text)) continue;
-          // Only click if it looks like a conflict/modal context
-          const inModal = btn.closest('[class*="modal"],[class*="dialog"],[class*="popup"],[class*="conflict"],[class*="alert"]');
-          if (inModal) { btn.click(); return; }
-        }
-      } catch (_) {}
-    };
-
-    const _obs = new MutationObserver(tryClickConflict);
-    _obs.observe(document.documentElement, { childList: true, subtree: true });
-    // Disconnect after 30s to avoid leaking the observer on long-lived pages.
-    setTimeout(() => { try { _obs.disconnect(); } catch (_) {} }, 30000);
+  const guard = () => {
+    try {
+      const btns = Array.from(document.querySelectorAll('button, .btn'));
+      const cookieBtn =
+        document.querySelector('.cookies-consent__button') ||
+        btns.find(b => /принять/i.test((b.innerText || '').trim())) ||
+        null;
+      if (cookieBtn) cookieBtn.click();
+      // "already open in another tab" modal → take over with "Да"
+      if (/в другой вкладке/i.test(document.body?.innerText || '')) {
+        const da = btns.find(b => (b.innerText || '').trim() === 'Да');
+        if (da) da.click();
+      }
+    } catch (_) {}
+  };
+  try {
+    const mo = new MutationObserver(guard);
+    if (document.body) mo.observe(document.body, { childList: true, subtree: true });
+    else document.addEventListener('DOMContentLoaded', () => {
+      guard();
+      try { mo.observe(document.body, { childList: true, subtree: true }); } catch (_) {}
+    });
+    setInterval(guard, 1500);
   } catch (_) {}
 }
