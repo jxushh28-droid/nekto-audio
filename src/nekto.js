@@ -1,5 +1,4 @@
 import { chromium } from 'playwright';
-import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { installBrowserRelay, inspectBrowserMicrophone } from './browser-init.js';
@@ -10,12 +9,12 @@ import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
-import { writeTokenExtension, extensionBrowserOptions, generateFingerprint, fpSeed } from './token-extension.js';
+import { tokenExtensionScript, browserLaunchOptions, generateFingerprint, fpSeed } from './token-extension.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
 import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificationReport } from './network-diagnostics.js';
 
-import { isProfileLockError, recoverRailwayProfileLock } from './profile-lock.js';
+// profile-lock.js no longer needed: no persistent browser profile
 
 import { writeSilentMicrophone } from './silent-microphone.js';
 
@@ -32,8 +31,8 @@ export class NektoBrowser {
     this.monitorTimer = null; this.monitorVersion = 0;
     this.authorization = null; this.observedStage = null;
     this.controlDiagnostics = null;
-    this.profilePath = resolve(directory, 'nekto-browser');
-    this.extensionPath = resolve(directory, 'nekto-prime');
+    // No persistent profile path — each session gets a fresh browser.newContext() (incognito).
+    // This prevents ban fingerprints from accumulating in IndexedDB / localStorage across restarts.
     this.microphonePath = resolve(directory, 'silent-microphone.wav');
   }
 
@@ -81,26 +80,13 @@ export class NektoBrowser {
   }
 
   async launch(token = '') {
-    if (this.context) return this.context;
-    await writeTokenExtension(this.extensionPath, token);
+    // Launch the browser process once and keep it alive across sessions.
+    // Each openSession() creates a fresh incognito context (browser.newContext()) so
+    // there is no localStorage / IndexedDB / cookie accumulation between sessions.
+    if (this.browser?.isConnected()) return this.browser;
     await writeSilentMicrophone(this.microphonePath);
-    await mkdir(this.profilePath, { recursive: true, mode: 0o700 });
-    // Derive the same deterministic fingerprint used inside the extension script
-    // so the Chromium --user-agent flag and the JS navigator spoof always agree.
-    const { userAgent } = generateFingerprint(token);
-    let context;
-    try { context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath, this.microphonePath, userAgent)); }
-    catch (error) {
-      if (!isProfileLockError(error) || !await recoverRailwayProfileLock(this.profilePath)) throw error;
-      console.log(JSON.stringify({ event: 'nekto_profile_lock_recovered' }));
-      context = await chromium.launchPersistentContext(this.profilePath, extensionBrowserOptions(this.extensionPath, this.microphonePath, userAgent));
-    }
-    // Spoof Origin to match what a real browser user on nekto.me sends.
-    // ModHeader does the same thing for manual users — without it nekto's server
-    // sees the wrong origin on WebSocket upgrade requests and throws captcha-request.
-    await context.setExtraHTTPHeaders({ 'origin': 'https://nekto-me.kz' });
-    this.context = context; this.browser = context.browser();
-    return context;
+    this.browser = await chromium.launch(browserLaunchOptions(this.microphonePath));
+    return this.browser;
   }
   async search(token) {
     if (this.page && !this.page.isClosed()) return this.next(token, { endCurrentCall: false });
@@ -123,12 +109,20 @@ export class NektoBrowser {
     try {
       if (previous) await previous.close().catch(() => {});
       check();
-      context = await this.launch(token);
+      // Get (or start) the browser process, then open a fresh incognito context.
+      // Each session starts completely clean — no stored cookies, localStorage or
+      // IndexedDB from previous sessions. Token + fingerprint are injected via
+      // addInitScript below instead of a Chrome extension.
+      const browser = await this.launch(token);
       check();
+      const { userAgent } = generateFingerprint(token);
+      context = await browser.newContext({ userAgent });
       await context.grantPermissions(['microphone'], { origin: new URL(NEKTO_URL).origin });
+      // Spoof Origin to match what a real browser user on nekto.me sends.
+      await context.setExtraHTTPHeaders({ 'origin': 'https://nekto-me.kz' });
       check();
       this.context = context;
-      const page = context.pages()[0] || await context.newPage();
+      const page = await context.newPage();
       check();
       this.page = page;
       await attachNektoDiagnostics(page, token, {
@@ -166,37 +160,21 @@ export class NektoBrowser {
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
       });
       await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
-      // Anti-detection: FPT hash bypass + WebGL/Canvas/WebGPU/Client Hints spoof + tab-conflict auto-click.
-      // fptHash = md5(token)    → stable per-token device identity on nekto's server (prevents ban cross-contamination).
-      // fpSeed  = FNV-1a(token) → LCG seed for canvas pixel noise (breaks FingerprintJS cross-slot correlation).
-      // gumHash = sha256(token+'gum') → replaces the getUserMedia stream hash sent in the register WS payload.
-      //           A fake/silent mic produces a detectable gumHash; we substitute a deterministic token-derived value.
+      // Token + fingerprint injection (replaces the Chrome extension approach).
+      // tokenExtensionScript writes authToken + cookiesAccepted to localStorage at
+      // document_start and applies navigator/screen/Intl spoof overrides.
+      await page.addInitScript({ content: tokenExtensionScript(token) });
+      // Anti-detection: WebGL/Canvas/WebGPU/Client Hints spoof + gumHash bypass + tab-conflict auto-click.
+      // fpSeed  = FNV-1a(token) → LCG seed for canvas pixel noise (stable per token, different per token).
+      // gumHash = sha256(token+'gum') → replaces the getUserMedia stream hash (fake mic produces bot hash).
       await page.addInitScript(installAntiDetect, {
-        fptHash: createHash('md5').update(token || '').digest('hex'),
+        fptHash: null, // fpt is NOT replaced — incognito context gives a fresh FingerprintJS ID each session
         fpSeed: fpSeed(token || ''),
         gumHash: createHash('sha256').update((token || '') + '-gum').digest('hex'),
       });
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       stage = 'load';
-      // Clear all cookies AND domain storage from nekto before each session.
-      // The persistent profile accumulates localStorage, IndexedDB and cookies that
-      // the server uses to track and flag sessions across restarts. Even when the token
-      // changes, stale storage can keep associating this context with a flagged session.
-      // CDP Storage.clearDataForOrigin wipes localStorage + IndexedDB + service workers
-      // for the origin BEFORE any navigation, so the extension re-injects the token and
-      // cookiesAccepted flag into a completely clean slate at document_start.
-      await context.clearCookies({ domain: 'nekto-me.kz' }).catch(() => {});
-      try {
-        const cdp = await context.newCDPSession(page);
-        await cdp.send('Storage.clearDataForOrigin', {
-          origin: 'https://nekto-me.kz',
-          storageTypes: 'local_storage,indexeddb,service_workers,cache_storage',
-        });
-        await cdp.detach();
-        console.log(JSON.stringify({ event: 'nekto_domain_storage_cleared' }));
-      } catch (clearErr) {
-        console.log(JSON.stringify({ event: 'nekto_domain_storage_clear_failed', error: String(clearErr) }));
-      }
+      // Fresh incognito context — no storage clear needed (context.newContext() starts empty).
       check();
       const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
       if (response && response.status() >= 400) throw searchError('load');
@@ -289,7 +267,7 @@ export class NektoBrowser {
       }
       else {
         await context?.close().catch(() => {});
-        if (this.context === context) { this.page = null; this.context = null; this.browser = null; }
+        if (this.context === context) { this.page = null; this.context = null; }
       }
       if (cancelled) throw new Error('Nekto search was stopped.');
       const known = ['Nekto is asking for browser verification. Automatic search stopped.',
@@ -399,13 +377,14 @@ export class NektoBrowser {
     this.protocolDiagnostics = null;
     const context = this.context;
     this.page = null; this.context = null;
-    this.browser = null;
+    // Keep this.browser alive — it's reused across sessions (newContext() per session).
     if (context) await context.close().catch(() => {});
   }
   async close() {
     await this.stop();
-    await this.browser?.close().catch(() => {});
+    const browser = this.browser;
     this.browser = null;
+    await browser?.close().catch(() => {});
   }
 }
 

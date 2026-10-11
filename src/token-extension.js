@@ -143,6 +143,26 @@ export async function writeTokenExtension(directory, token, { matches = ['https:
   return directory;
 }
 
+/**
+ * Launch options for a bare chromium.launch() call (no persistent profile, no extension).
+ * Token injection + fingerprint spoof are handled via addInitScript on each fresh context.
+ * User-agent is set per-context via browser.newContext({ userAgent }) so different tokens
+ * can use different UAs without relaunching the browser.
+ */
+export function browserLaunchOptions(silentMicrophonePath) {
+  return {
+    channel: 'chromium', headless: true, ignoreDefaultArgs: ['--mute-audio'],
+    args: [
+      '--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
+      '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
+      '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
+      '--disable-blink-features=AutomationControlled',
+      ...(silentMicrophonePath ? [`--use-file-for-fake-audio-capture=${silentMicrophonePath}`] : []),
+    ],
+  };
+}
+
+/** @deprecated Use browserLaunchOptions() + browser.newContext() instead of persistent profile. */
 export function extensionBrowserOptions(extensionPath, silentMicrophonePath, userAgent) {
   return {
     channel: 'chromium', headless: true, ignoreDefaultArgs: ['--mute-audio'],
@@ -150,8 +170,6 @@ export function extensionBrowserOptions(extensionPath, silentMicrophonePath, use
       '--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
-      // Critical: remove the single biggest bot-detection tell.
-      // Without this flag navigator.webdriver === true and every anti-bot script stops here.
       '--disable-blink-features=AutomationControlled',
       ...(silentMicrophonePath ? [`--use-file-for-fake-audio-capture=${silentMicrophonePath}`] : []),
       ...(userAgent ? [`--user-agent=${userAgent}`] : []),
