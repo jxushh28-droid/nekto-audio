@@ -30,6 +30,8 @@ export class NektoBrowser {
     this.monitorTimer = null; this.monitorVersion = 0;
     this.entryRetryUsed = false; this.entryRetryPromise = null; this.searchIntent = false;
     this.partnerSeen = false; this.callAdvancePromise = null;
+    this.manualSearch = process.env.NEKTO_MANUAL_SEARCH === '1';
+    this.waitingForManualSearch = false;
     this.authorization = null; this.observedStage = null;
     this.controlDiagnostics = null;
     // Each session has its own non-persistent browser context.
@@ -55,7 +57,7 @@ export class NektoBrowser {
         check();
         this.callState = observed.callState;
         this.authorizationDiagnostics = observed.authorizationDiagnostics;
-        if (observed.callState.verification && this.searchIntent && !this.entryRetryUsed) {
+        if (observed.callState.verification && this.searchIntent && !this.entryRetryUsed && !this.manualSearch) {
           this.forwarding = false;
           try { await this.retryFromEntry(page, token, check); }
           catch (error) {
@@ -87,6 +89,10 @@ export class NektoBrowser {
         if (!observed.callState.searching && !observed.callState.partnerConnected &&
             !observed.callState.verification && !observed.callState.attention) this.searchIntent = false;
         const forwarding = canForwardAudio(observed, captureError);
+        if (this.manualSearch && forwarding) {
+          this.waitingForManualSearch = false;
+          this.searchIntent = true;
+        }
         if (forwarding !== this.forwarding) {
           console.log(JSON.stringify({ event: 'nekto_relay_transition',
             forwarding, phase: this.callState.phase, authorization: observed.authorizationReason }));
@@ -144,6 +150,7 @@ export class NektoBrowser {
     this.protocolDiagnostics = null;
     this.entryRetryUsed = false; this.searchIntent = true;
     this.entryRetryPromise = null; this.partnerSeen = false; this.callAdvancePromise = null;
+    this.waitingForManualSearch = false;
     const check = () => {
       if (generation !== this.generation) throw new Error('Nekto search was stopped.');
     };
@@ -196,7 +203,7 @@ export class NektoBrowser {
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       return await this.loadAndSearch(page, token, check, value => { stage = value; });
     } catch (error) {
-      if (generation === this.generation && error.code === 'NEKTO_VERIFICATION' && !this.entryRetryUsed && this.page) {
+      if (generation === this.generation && error.code === 'NEKTO_VERIFICATION' && !this.entryRetryUsed && !this.manualSearch && this.page) {
         try { return await this.retryFromEntry(this.page, token, check, value => { stage = value; }); }
         catch (retryError) { error = retryError; }
       }
@@ -285,13 +292,14 @@ export class NektoBrowser {
     const identity = await page.evaluate(confirmAudioToken, { token, timeout: 3000 }); check();
     this.authorizationDiagnostics = identity.diagnostics || null;
     if (!identity.ok) throw authorizationError(identity.reason);
+    if (this.manualSearch) return this.awaitManualSearch(page, token, check);
     setStage('click'); await button.click({ timeout: 5000 }); check();
     setStage('confirm');
     return this.finishSearch(page, token, check, 'after-start');
   }
   async retryFromEntry(page, token, check, setStage) {
     check();
-    if (this.entryRetryUsed || page !== this.page || new URL(page.url()).origin !== new URL(NEKTO_URL).origin) {
+    if (this.manualSearch || this.entryRetryUsed || page !== this.page || new URL(page.url()).origin !== new URL(NEKTO_URL).origin) {
       throw authorizationError('verification-required');
     }
     this.entryRetryUsed = true;
@@ -342,13 +350,27 @@ export class NektoBrowser {
     check(); this.authorizationDiagnostics = identity.diagnostics || null;
     if (!identity.ok) throw authorizationError(identity.reason);
   }
+  async awaitManualSearch(page, token, check) {
+    const state = await this.recordSessionState(page, token, 'manual-search-ready', check);
+    check();
+    if (state.verification) throw authorizationError('verification-required');
+    if (state.restricted) throw authorizationError('native-restriction');
+    if (state.attention) throw searchError('attention');
+    if (state.searching || state.partnerConnected) return this.finishSearch(page, token, check, 'manual-search-active');
+    this.forwarding = false; this.searchIntent = false; this.partnerSeen = false;
+    this.waitingForManualSearch = true;
+    this.promptInfo = null; this.lastFailure = null; this.controlDiagnostics = null;
+    return 'Nekto is ready. Click Search in the bot’s browser window; incoming audio will relay automatically.';
+  }
   async advanceSearch(page, token, check, { endCurrentCall = true } = {}) {
     try {
-      await advanceAudioCall(page, { check, endCurrentCall, authorize: () => this.authorizePage(page, token, check) });
+      const state = await advanceAudioCall(page, { check, endCurrentCall, startSearch: !this.manualSearch,
+        authorize: () => this.authorizePage(page, token, check) });
+      if (this.manualSearch && !state.searching && !state.partnerConnected) return this.awaitManualSearch(page, token, check);
       return await this.finishSearch(page, token, check, endCurrentCall ? 'next-confirmation' : 'resume-confirmation');
     } catch (error) {
       check();
-      if (error.code === 'NEKTO_VERIFICATION' && !this.entryRetryUsed) {
+      if (error.code === 'NEKTO_VERIFICATION' && !this.entryRetryUsed && !this.manualSearch) {
         try { return await this.retryFromEntry(page, token, check); }
         catch (retryError) { error = retryError; check(); }
       }
@@ -390,6 +412,7 @@ export class NektoBrowser {
     check();
     if (captureError) throw Object.assign(new Error(captureError), { code: 'NEKTO_CAPTURE' });
     this.promptInfo = null; this.lastFailure = null; this.forwarding = true;
+    this.waitingForManualSearch = false;
     this.partnerSeen = this.callState.partnerConnected;
     this.authorization = identity.reason;
     this.controlDiagnostics = null;
@@ -412,7 +435,8 @@ export class NektoBrowser {
       iceStates: status.iceStates || [], trackEvents: status.trackEvents || 0, capturedTracks: status.tracks || 0,
       inboundPackets: status.inboundPackets || 0, inboundBytes: status.inboundBytes || 0,
       audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
-    return { ...status, protocolDiagnostics: this.protocolDiagnostics, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    return { ...status, manualSearch: this.manualSearch, waitingForManualSearch: this.waitingForManualSearch,
+      protocolDiagnostics: this.protocolDiagnostics, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async screenshot() {
     const page = this.page;
@@ -425,6 +449,7 @@ export class NektoBrowser {
     this.searchIntent = false;
     this.entryRetryUsed = false; this.entryRetryPromise = null;
     this.partnerSeen = false; this.callAdvancePromise = null;
+    this.waitingForManualSearch = false;
     this.forwarding = false;
     this.protocolDiagnostics = null;
     const context = this.context;

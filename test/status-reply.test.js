@@ -40,3 +40,11 @@ test('private status does not infer a native register payload from a storage mat
   const reply = statusReply({ ...args, token: 'fixture-token' });
   assert(reply.content.includes('Native register payload: not observed'));
 });
+
+test('manual status distinguishes waiting for Search from an active native search', () => {
+  const status = { ...args.status, manualSearch: true, waitingForManualSearch: true,
+    callState: { phase: 'ready to search', searching: false, partnerConnected: false } };
+  assert.match(statusReply({ ...args, status }).content, /Search control: manual; click Search in the bot browser/);
+  status.callState.searching = true;
+  assert(!statusReply({ ...args, status }).content.includes('click Search in the bot browser'));
+});

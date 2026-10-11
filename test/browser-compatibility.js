@@ -155,6 +155,39 @@ try {
   await new Promise(resolve => setTimeout(resolve, 1100));
   assert.equal(await page.evaluate(() => window.nativeStarts), 1, 'Stop after recovery restarted search');
   relay.stopSessionMonitor();
+  // Manual mode exercises production registration without any automatic Start.
+  relay.manualSearch = true;
+  const beforeManual = nektoLoads;
+  assert.match(await relay.openSession('fixture-native-token'), /^Nekto is ready\. Click Search/);
+  page = relay.page;
+  assert.equal(await page.evaluate(() => window.nativeStarts), 0, 'Manual session clicked Start automatically');
+  assert.equal(relay.waitingForManualSearch, true);
+  assert.equal(relay.forwarding, false);
+  await page.getByRole('button', { name: 'Начать разговор', exact: true }).click(); // Simulates the owner's UI action.
+  for (let i = 0; i < 50 && !relay.forwarding; i++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(relay.forwarding, true, 'Manually started search did not resume the relay');
+  assert.equal(relay.waitingForManualSearch, false);
+  await page.evaluate(() => {
+    const store = document.querySelector('#app').__vue__.$store;
+    store.state.user.isSearching = false;
+    const finished = document.createElement('p'); finished.className = 'callScreen__finishText';
+    finished.textContent = 'Собеседник завершил разговор'; document.body.append(finished);
+  });
+  for (let i = 0; i < 50 && !relay.waitingForManualSearch; i++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(relay.waitingForManualSearch, true, 'Partner leaving did not return to manual Search');
+  assert.equal(await page.evaluate(() => window.nativeStarts), 1, 'Partner leaving clicked Start automatically');
+  assert.match(await relay.next('fixture-native-token'), /^Nekto is ready\. Click Search/);
+  assert.equal(await page.evaluate(() => window.nativeStarts), 1, 'Manual Next clicked Start automatically');
+  await page.evaluate(() => window.showChallenge());
+  await assert.rejects(relay.next('fixture-native-token'), error => error.code === 'NEKTO_VERIFICATION');
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(nektoLoads, beforeManual + 1, 'Manual verification was automatically reloaded');
+  assert.equal((await relay.status('fixture-native-token')).authorizationDiagnostics.captcha, true);
+  relay.stopSessionMonitor();
+  await page.evaluate(() => {
+    document.querySelector('#app').__vue__.$store.state.system.captchaRequired = false;
+    document.querySelectorAll('iframe, .callScreen__finishText').forEach(element => element.remove());
+  });
   await page.evaluate(() => {
     const frame = document.createElement('iframe'); frame.src = 'https://www.google.com/recaptcha/fixture'; document.body.append(frame);
   });
@@ -169,7 +202,7 @@ try {
     assert.equal(request.headers.origin, undefined, 'Google document request received a forced Nekto Origin');
   }
   assert(requests.some(request => request.host === 'www.google.com'));
-  console.log('Browser compatibility passed: production session, native identity/crypto, scoped Google/CAPTCHA setup, delayed widget/image loading, session-scoped retry across Next/join, persistent challenge preserved, manual Stop respected.');
+  console.log('Browser compatibility passed: production session, native identity/crypto, scoped Google/CAPTCHA setup, delayed widget/image loading, session-scoped retry across Next/join, persistent challenge preserved, manual Stop respected, manual Search/Next with no automatic Start or challenge reload.');
 } finally {
   await baseline?.close();
   await relay?.close();

@@ -101,6 +101,32 @@ test('an in-flight observation cannot re-enable a stopped session', async () => 
   } finally { release(); browser.stopSessionMonitor(); }
 });
 
+test('manual Search resumes native audio and leaves verification in place without recovery', async () => {
+  const browser = new NektoBrowser(() => {});
+  browser.manualSearch = true; browser.waitingForManualSearch = true;
+  let state = { ...connected(), partnerConnected: false, searching: false }, diagnostics = identity(), retries = 0;
+  const page = { isClosed: () => false,
+    evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
+      fn.name === 'confirmAudioToken' ? { reason: diagnostics.captcha ? 'verification-required' : 'native-session-confirmed',
+        diagnostics: { ...diagnostics } } : null };
+  browser.page = page;
+  browser.retryFromEntry = async () => { retries++; };
+  try {
+    browser.startSessionMonitor(page, 'fixture-token');
+    await until(() => browser.callState);
+    assert.equal(browser.forwarding, false);
+    state.searching = true;
+    await until(() => browser.forwarding);
+    assert.equal(browser.waitingForManualSearch, false);
+    assert.equal(browser.searchIntent, true);
+    state.verification = true; diagnostics.captcha = true;
+    await until(() => !browser.forwarding);
+    assert.equal(retries, 0);
+    state.verification = false; diagnostics.captcha = false;
+    await until(() => browser.forwarding);
+  } finally { await browser.stop(); }
+});
+
 test('monitor continues after a partner leaves and respects a subsequent manual Stop', async () => {
   const browser = new NektoBrowser(() => {});
   let state = connected(), advances = 0;

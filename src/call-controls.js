@@ -52,7 +52,7 @@ async function settleCallPrompt(page, { check, timeout, interval, endCurrentCall
 }
 
 export async function advanceAudioCall(page, { check = () => {}, authorize, endCurrentCall = true,
-  timeout = 15000, startTimeout = 30000, interval = 250 } = {}) {
+  startSearch = true, timeout = 15000, startTimeout = 30000, interval = 250 } = {}) {
   check();
   let state = await settleCallPrompt(page, { check, timeout, interval, endCurrentCall });
   check(); assertCallAvailable(state);
@@ -80,6 +80,7 @@ export async function advanceAudioCall(page, { check = () => {}, authorize, endC
   const { button: start, state: observed } = await waitForStartControl(page, { check, timeout: startTimeout, interval });
   if (!start) return observed;
   await authorize(); check();
+  if (!startSearch) return observed;
   await start.click({ timeout: 5000 });
   return waitForAudioSearch(page, { check, timeout, interval });
 }

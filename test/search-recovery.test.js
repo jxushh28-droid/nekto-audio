@@ -53,6 +53,15 @@ test('next waits for a monitor-owned recovery before cancelling its monitor', as
   assert.equal(advanced, true);
 });
 
+test('manual mode cannot perform entry recovery even when invoked directly', async () => {
+  const browser = new NektoBrowser(() => {});
+  browser.manualSearch = true;
+  const page = { url: () => NEKTO_URL }; browser.page = page;
+  browser.loadAndSearch = async () => { throw Error('must not navigate'); };
+  await assert.rejects(browser.retryFromEntry(page, 'fixture-token', () => {}), error => error.code === 'NEKTO_VERIFICATION');
+  assert.equal(browser.entryRetryUsed, false);
+});
+
 test('a replacement page, third-party navigation, or cancelled search cannot be reloaded', async () => {
   for (const kind of ['replacement', 'other-origin', 'cancelled']) {
     const browser = new NektoBrowser(() => {});

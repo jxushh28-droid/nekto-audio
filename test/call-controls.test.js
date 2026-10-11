@@ -85,6 +85,17 @@ test('next starts again after a partner leaves, with or without a notice', async
   }
 });
 
+test('manual Search keeps native End confirmation but never presses Start', async () => {
+  for (const initial of [{}, { partnerConnected: true }]) {
+    const f = fixture(initial, { confirmation: !!initial.partnerConnected });
+    const result = await advanceAudioCall(f.page, { ...f.options, startSearch: false });
+    assert.equal(result.searching, false);
+    assert.equal(result.partnerConnected, false);
+    assert.deepEqual(f.counts(), { authorized: 2, ended: Number(!!initial.partnerConnected),
+      started: 0, confirmations: Number(!!initial.partnerConnected) });
+  }
+});
+
 test('call-related forms and an End prompt during repeated join stay unanswered', async () => {
   for (const options of [{ fieldCount: 1 }, { endCurrentCall: false }]) {
     const f = fixture({}, { initialPrompt: 'end-confirm', fieldCount: options.fieldCount || 0 });
