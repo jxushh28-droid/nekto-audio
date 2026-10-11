@@ -183,6 +183,69 @@ export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
     };
   } catch (_) {}
 
+  // ── 3b. Audio fingerprint spoof (OfflineAudioContext + AnalyserNode) ─────────
+  // nekto's FP includes an `audio` component (≈ "124.04…") computed by rendering
+  // an oscillator→compressor through OfflineAudioContext and summing samples
+  // 4500–5000. This value is IDENTICAL on every session from the same machine
+  // (audio DSP is deterministic, headless or not), so it links all of a user's
+  // tokens to ONE device — once that device is flagged, every new token inherits
+  // the shadow/phantom ban (→ infinite search). Perturbing the rendered buffer by
+  // ~1e-7 at a per-token stride makes the audio component unique per token (stable
+  // within a token), breaking the cross-token device linkage. The LIVE AudioContext
+  // used by the mic relay is untouched — only offline render + analyser are patched.
+  // Technique ported from fingerprint-shield-extension (edinica01).
+  try {
+    const seedStr = String((fpSeed >>> 0) || 1);
+    const hash32 = (input) => {
+      let h = 0x811c9dc5;
+      const v = String(input);
+      for (let i = 0; i < v.length; i++) { h ^= v.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+      return h >>> 0;
+    };
+    const noise = (label, index, amp = 1) => (hash32(`${seedStr}|${label}|${index}`) % (amp * 2 + 1)) - amp;
+    const perturbBuffer = (buffer, label) => {
+      try {
+        if (!buffer || typeof buffer.getChannelData !== 'function') return;
+        const channels = buffer.numberOfChannels || 1;
+        for (let ch = 0; ch < channels; ch++) {
+          const data = buffer.getChannelData(ch);
+          const stride = 131;
+          const offset = hash32(`${seedStr}|${label}|${ch}`) % stride;
+          for (let i = offset; i < data.length; i += stride) {
+            data[i] += noise(`${label}:${ch}`, i, 3) * 1e-7;
+          }
+        }
+      } catch (_) {}
+    };
+    const OfflineCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (OfflineCtor && OfflineCtor.prototype.startRendering) {
+      const origStart = OfflineCtor.prototype.startRendering;
+      OfflineCtor.prototype.startRendering = function(...args) {
+        const result = origStart.apply(this, args);
+        if (result && typeof result.then === 'function') {
+          return result.then((buf) => { perturbBuffer(buf, 'audio-offline'); return buf; });
+        }
+        return result;
+      };
+    }
+    if (typeof AnalyserNode !== 'undefined') {
+      const origFloat = AnalyserNode.prototype.getFloatFrequencyData;
+      if (origFloat) {
+        AnalyserNode.prototype.getFloatFrequencyData = function(array) {
+          origFloat.call(this, array);
+          try { for (let i = 0; i < array.length; i++) array[i] += noise('audio-float', i, 2) * 1e-5; } catch (_) {}
+        };
+      }
+      const origByte = AnalyserNode.prototype.getByteFrequencyData;
+      if (origByte) {
+        AnalyserNode.prototype.getByteFrequencyData = function(array) {
+          origByte.call(this, array);
+          try { for (let i = 0; i < array.length; i++) array[i] = Math.max(0, Math.min(255, array[i] + noise('audio-byte', i, 1))); } catch (_) {}
+        };
+      }
+    }
+  } catch (_) {}
+
   // ── 4. WebGPU adapter info ──────────────────────────────────────────────────
   try {
     if (typeof navigator !== 'undefined' && navigator.gpu) {
