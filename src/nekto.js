@@ -267,6 +267,11 @@ export class NektoBrowser {
     await page.evaluate(reason => { window.__nektoRelay.authorization = reason; }, authorization.reason); check();
     const initial = await this.recordSessionState(page, token, 'before-start', check);
     if (initial.attention || initial.verification || initial.restricted) return this.finishSearch(page, token, check, 'before-start');
+    if (!this.manualSearch && !initial.searching && !initial.partnerConnected) {
+      setStage('start-delay');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      check();
+    }
     setStage('control');
     const { button } = await waitForStartControl(page, { check });
     if (!button) return this.finishSearch(page, token, check, 'already-searching');
