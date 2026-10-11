@@ -241,6 +241,7 @@ try {
   await page.evaluate(() => {
     const store = document.body.__vue__.$store;
     store.state.chat = { activeConnectionId: 1 };
+    store.state.user.isSearching = true; // Native flag survives Searching -> /peer.
     window.nativeStarts = 0; window.nativeEnds = 0;
     const end = document.createElement('button'); end.textContent = 'Завершить';
     const start = document.createElement('a'); start.href = '#/'; start.textContent = 'Начать поиск собеседника'; start.hidden = true;
@@ -251,11 +252,14 @@ try {
       const yes = document.createElement('button'); yes.className = 'swal2-confirm'; yes.textContent = 'Завершить';
       yes.onclick = () => {
         store.state.chat.activeConnectionId = null;
+        const finished = document.createElement('p'); finished.className = 'callScreen__finishText';
+        finished.textContent = 'Вы завершили разговор'; document.body.append(finished);
         setTimeout(() => { modal.remove(); end.hidden = true; start.hidden = false; }, 100);
       };
       modal.append(yes); document.body.append(modal);
     };
-    start.onclick = event => { event.preventDefault(); window.nativeStarts++; store.state.user.isSearching = true; start.hidden = true; };
+    start.onclick = event => { event.preventDefault(); window.nativeStarts++; store.state.user.isSearching = true;
+      document.querySelector('.callScreen__finishText')?.remove(); start.hidden = true; };
     const hiddenStart = document.createElement('button'); hiddenStart.id = 'searchCompanyBtn'; hiddenStart.hidden = true;
     const hiddenCookies = document.createElement('button'); hiddenCookies.id = 'acceptCookies'; hiddenCookies.hidden = true;
     const cookies = document.createElement('button'); cookies.id = 'acceptCookies'; cookies.textContent = 'Accept cookies';
@@ -273,6 +277,7 @@ try {
   await relaySession.next('local-test-token'); // Already searching: do not click Start again.
   assert.equal(relaySession.page, page); assert.equal(relaySession.forwarding, true);
   assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [1, 1]);
+  assert.equal(await page.evaluate(() => document.body.__vue__.$store.state.user.isSearching), true, 'Bot modified the native search flag');
   assert.equal(await page.evaluate(() => window.nativeCookies), 0, 'Search unexpectedly accepted cookies');
   await page.evaluate(() => {
     const store = document.body.__vue__.$store;
@@ -305,7 +310,7 @@ try {
   // The current site's finished screen must restart without a Discord /next.
   await page.evaluate(() => {
     const store = document.body.__vue__.$store;
-    store.state.user.isSearching = false; store.state.chat.activeConnectionId = null;
+    store.state.user.isSearching = true; store.state.chat.activeConnectionId = null;
     document.querySelectorAll('button:not(#acceptCookies), a, .btn').forEach(control => control.remove());
     const notice = document.createElement('p'); notice.className = 'callScreen__finishText'; notice.textContent = 'Собеседник завершил разговор';
     const start = document.createElement('button'); start.className = 'callScreen__findBtn btn green filled';
@@ -336,6 +341,28 @@ try {
   assert.equal(await page.evaluate(() => window.nativeAutoConfirms), 1, 'Monitor did not confirm the native End prompt exactly once');
   assert.equal(relaySession.forwarding, true);
   relaySession.stopSessionMonitor();
+  // Reproduce the uploaded screenshot: /peer is ended, its green Search button
+  // is available, and Vuex still says isSearching=true. /next must click it and
+  // wait for the actual route/UI transition instead of reporting success early.
+  await page.evaluate(() => {
+    const store = document.body.__vue__.$store;
+    store.state.chat.activeConnectionId = null; store.state.user.isSearching = true;
+    location.hash = '/peer';
+    document.querySelectorAll('button:not(#acceptCookies), a, .btn, .callScreen__finishText').forEach(control => control.remove());
+    const finished = document.createElement('p'); finished.className = 'callScreen__finishText';
+    finished.textContent = 'Вы завершили разговор';
+    const start = document.createElement('button'); start.className = 'callScreen__findBtn btn green filled';
+    start.innerHTML = '<svg aria-hidden="true"><path d="M0 0"></path></svg> Начать поиск собеседника';
+    window.screenshotStarts = 0; window.newSearchUiReady = false;
+    start.onclick = () => { window.screenshotStarts++;
+      setTimeout(() => { finished.remove(); start.remove(); location.hash = '/searching'; window.newSearchUiReady = true; }, 200); };
+    document.body.append(finished, start);
+  });
+  assert.match(await relaySession.next('local-test-token'), /^Searching on Nekto/);
+  assert.deepEqual(await page.evaluate(() => [window.screenshotStarts, window.newSearchUiReady,
+    document.body.__vue__.$store.state.user.isSearching]), [1, true, true]);
+  relaySession.stopSessionMonitor();
+  await page.evaluate(() => { location.hash = '/'; });
   // /next can arrive after the other participant leaves or with a native End
   // confirmation already open. Both cases should acknowledge once and Start.
   await page.evaluate(() => {

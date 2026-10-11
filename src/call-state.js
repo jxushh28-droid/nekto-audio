@@ -22,13 +22,19 @@ export function readAudioCallState() {
   const verification = !!(state?.system.captchaRequired || state?.system.hcaptchaRequired);
   const restricted = !!state?.system.forceDisconnectReason || visible('#mask_bad') || visible('#mask_bad_inet') || visible('.swal2-popup.banPopup');
   const attention = visible('.swal2-popup');
-  const searching = !!state?.user.isSearching || /#\/searching(?:[/?]|$)/.test(location.hash) ||
-    visible('.chat-step.scan .search_loader');
-  const partnerConnected = state?.chat?.activeConnectionId != null && state?.system.isAuth === true &&
+  const activeCall = state?.chat?.activeConnectionId != null;
+  const callEnded = !activeCall && visible('.callScreen__finishText');
+  // Nekto's Searching component sets isSearching=true, then navigates to /peer
+  // without clearing it. It remains true after peer-disconnect. The call screen
+  // and its finished state therefore take precedence over that historical flag.
+  const callScreen = callEnded || /#\/peer(?:[/?]|$)/.test(location.hash);
+  const searching = !activeCall && !callScreen && (!!state?.user.isSearching ||
+    /#\/searching(?:[/?]|$)/.test(location.hash) || visible('.chat-step.scan .search_loader'));
+  const partnerConnected = activeCall && state?.system.isAuth === true &&
     state?.system.socketConnected === true && !verification && !restricted && !attention;
-  const callEnded = state?.chat?.activeConnectionId == null && visible('.callScreen__finishText');
   const phase = verification ? 'verification required' : restricted ? 'restricted' : attention ? 'awaiting a website prompt' :
-    partnerConnected ? 'partner connected' : searching ? 'searching for a partner' : visible('#searchCompanyBtn') ? 'ready to search' : 'idle/loading';
+    partnerConnected ? 'partner connected' : callEnded ? 'call ended; ready to search' :
+    searching ? 'searching for a partner' : visible('#searchCompanyBtn') ? 'ready to search' : 'idle/loading';
   return { phase, searching, partnerConnected, callEnded, verification, restricted, attention };
 }
 

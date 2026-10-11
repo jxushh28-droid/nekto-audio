@@ -33,6 +33,8 @@ The relay observes native session state every 500 ms. A detected search CAPTCHA 
 
 `/next` handles the native `closeDialogPopup` ("У вас есть активный разговор. Завершить?"), ordinary End confirmations already open when the command arrives, their closing animation, and a notice that the other participant ended the call. The monitor also confirms ordinary call prompts and resumes searching when a partner leaves, using the native "Начать поиск собеседника" button on the finished-call screen. This keeps the existing browser context and registration. Unknown prompts, reports, forms, restrictions and verification controls are not answered automatically.
 
+Nekto can retain `user.isSearching=true` throughout a call and after it ends. Status and `/next` give the native `/peer` route, active connection and visible finished-call screen priority over that stale flag. Ending a call waits for its Start control, and a new search is confirmed only once the old call screen has gone away. The bot observes this state without changing Nekto's store.
+
 Incoming audio crosses the browser bridge in 40 ms batches, then an 80 ms jitter buffer absorbs uneven delivery. Excess backlog trims only the oldest frames instead of emptying the queue. Discord's playback reads pace complete 20 ms Opus packets, eliminating the separate PCM timer and transform backlog. The encoder uses the voice channel bitrate up to 96 kbps and enables Opus packet-loss protection. The relay's native playout sink is inaudible on the bot PC, avoiding an extra local copy. `/status` reports buffer underruns, trims and browser transport drops for diagnosing remaining glitches.
 
 ## Discord setup
