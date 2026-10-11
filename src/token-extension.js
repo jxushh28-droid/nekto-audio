@@ -97,37 +97,23 @@ function fingerprintSpoofScript(fp) {
 export function tokenExtensionScript(token) {
   const fp = generateFingerprint(token);
   // fingerprintSpoofScript runs first (document_start), then the token write.
+  // Token write matches the proven working browser extension EXACTLY: nekto hydrates
+  // user.authToken from localStorage['storage_audio_v2'] via vuex-persistedstate
+  // (persisted paths: user.authToken, user.openChats, user.searchParams, ...). No
+  // cookiesAccepted / __ls_chk__ — those are not real nekto fields; the site works
+  // without any consent flag once a valid token is present.
   return `${fingerprintSpoofScript(fp)}
 (() => {
   const TOKEN = ${JSON.stringify(token)};
   const KEY   = "storage_audio_v2";
-  const LSCHK = "__ls_chk__";
 
   const write = () => {
     try {
       const saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {};
-      const chk   = localStorage.getItem(LSCHK) || "";
-      // Always check BOTH conditions. If only the token matches but cookiesAccepted
-      // is not set, we must still write — otherwise nekto connects WS without the
-      // consent flag and the server sends captcha-request before Playwright can click
-      // the cookie button.
-      const needChk = chk.indexOf(TOKEN) === -1;
-      if (!needChk && saved?.user?.authToken === TOKEN && saved?.settings?.cookiesAccepted === true) return true;
+      if (saved?.user?.authToken === TOKEN) return true;
       saved.user = saved.user || {};
       saved.user.authToken = TOKEN;
-      // Pre-accept cookies so nekto's Vue app never enters the captcha-triggering
-      // state where WS connects before the cookie consent flag is set.
-      saved.settings = saved.settings || {};
-      saved.settings.cookiesAccepted = true;
       localStorage.setItem(KEY, JSON.stringify(saved));
-      // Pre-populate __ls_chk__ so nekto's K(authToken) function returns 1 (returning
-      // user) instead of 0/-1 (fresh/bot session). The FP component "lst" is derived
-      // from this and is signed into infoDataS. Having lst=1 removes the single
-      // strongest bot signal in the signed fingerprint payload.
-      if (needChk) {
-        const next = chk ? chk + "," + TOKEN : TOKEN;
-        localStorage.setItem(LSCHK, next);
-      }
       return true;
     } catch { return false; }
   };

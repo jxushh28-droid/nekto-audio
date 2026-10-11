@@ -178,34 +178,30 @@ export class NektoBrowser {
       check();
       const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
       if (response && response.status() >= 400) throw searchError('load');
-      // Confirm the extension wrote the token and cookiesAccepted flag to localStorage.
-      // If authTokenPresent=false the extension did not fire (extension load failure,
-      // wrong matches pattern, etc.). If cookiesAccepted=false the early-return fired
-      // before writing it — the bug is in tokenExtensionScript's guard condition.
+      // Confirm the token landed in BOTH localStorage AND the hydrated Vuex store.
+      // localStorage alone isn't enough — nekto authenticates off the Vuex state that
+      // vuex-persistedstate restores from storage_audio_v2 at store-creation time. If
+      // storeAuthToken is empty while lsAuthToken is set, the init script wrote too late
+      // (after the store initialised) and the session is unauthenticated → blocked.
       const injection = await page.evaluate(key => {
+        const out = { lsAuthToken: false, storeAuthToken: null };
         try {
           const saved = JSON.parse(localStorage.getItem(key) || '{}');
-          return { authTokenPresent: typeof saved?.user?.authToken === 'string' && saved.user.authToken.length > 0,
-            cookiesAccepted: saved?.settings?.cookiesAccepted === true };
-        } catch { return { authTokenPresent: false, cookiesAccepted: false }; }
+          out.lsAuthToken = typeof saved?.user?.authToken === 'string' && saved.user.authToken.length > 0;
+        } catch (_) {}
+        try {
+          // Reach the Vuex store via the root Vue instance mounted on #app.
+          const root = document.querySelector('#app')?.__vue__;
+          const tok = root?.$store?.state?.user?.authToken;
+          out.storeAuthToken = typeof tok === 'string' ? tok.length > 0 : null;
+        } catch (_) {}
+        return out;
       }, 'storage_audio_v2');
       console.log(JSON.stringify({ event: 'nekto_injection_check', ...injection }));
       check();
       this.microphone = await page.evaluate(inspectBrowserMicrophone);
       check();
       if (this.microphone.permission !== 'granted' || !this.microphone.inputs) throw searchError('microphone');
-      // Click the cookie consent button if it's still visible.
-      // Nekto's server triggers captcha-request when WS connects without the
-      // cookiesAccepted flag being set in Vue state. The extension pre-sets the
-      // localStorage value, but clicking the button also fires nekto's Vue
-      // mutation so the in-memory state matches — covering both paths.
-      try {
-        const cookieBtn = page.locator('#acceptCookies');
-        if (await cookieBtn.isVisible({ timeout: 2500 })) {
-          await cookieBtn.click({ timeout: 3000 });
-          console.log(JSON.stringify({ event: 'nekto_cookies_accepted' }));
-        }
-      } catch (_) {}
       check();
       stage = 'authorize';
       try { await page.waitForFunction(audioClientReady, null, { timeout: 20000 }); }
