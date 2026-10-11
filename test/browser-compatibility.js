@@ -19,15 +19,31 @@ try {
   const newContext = browser.newContext.bind(browser);
   const requests = [];
   let challengesRemaining = 0, nektoLoads = 0, contextsCreated = 0;
+  const loadingEvents = [];
   browser.newContext = async (...args) => {
     contextsCreated++;
     const context = await newContext(...args);
     await context.route('**/*', async route => {
       const request = route.request();
       requests.push({ host: new URL(request.url()).hostname, headers: request.headers() });
+      const path = new URL(request.url()).pathname;
+      if (path === '/recaptcha/api2/anchor') {
+        // Delayed cross-origin document and image: inserting an iframe alone
+        // must not qualify as a fully loaded CAPTCHA.
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await route.fulfill({ contentType: 'text/html', body: '<!doctype html><img src="/recaptcha/fixture-image.png"><button>Fixture checkbox</button>' });
+        return;
+      }
+      if (path === '/recaptcha/fixture-image.png') {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await route.fulfill({ contentType: 'image/gif', body: Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') });
+        loadingEvents.push('image-loaded');
+        return;
+      }
       const nekto = new URL(request.url()).hostname === new URL(NEKTO_URL).hostname;
       const challenge = nekto && challengesRemaining > 0;
       if (nekto) nektoLoads++;
+      if (nekto) loadingEvents.push('entry-load');
       if (challenge) challengesRemaining--;
       await route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html>
         <div id="app"><button id="searchCompanyBtn">Начать разговор</button>
@@ -39,9 +55,16 @@ try {
             subscribe() { return () => {}; } };
           document.querySelector('#app').__vue__ = { $store: store };
           window.nativeStarts = 0;
+          window.showChallenge = () => {
+            store.state.system.captchaRequired = true;
+            setTimeout(() => {
+              const frame = document.createElement('iframe'); frame.title = 'reCAPTCHA';
+              frame.src = 'https://www.google.com/recaptcha/api2/anchor'; document.body.append(frame);
+            }, 400);
+          };
           document.querySelector('#searchCompanyBtn').onclick = () => {
             window.nativeStarts++; store.state.user.isSearching = true;
-            if (${challenge}) store.state.system.captchaRequired = true;
+            if (${challenge}) window.showChallenge();
           };
           document.querySelector('#manual-stop').onclick = () => { store.state.user.isSearching = false; };
         </script>` });
@@ -83,17 +106,30 @@ try {
   });
   assert.equal(cryptoRoundTrip, true, 'Native fingerprint/registration payload was rewritten');
   const loadsBeforeLateChallenge = nektoLoads, currentContext = relay.context;
-  await page.evaluate(() => document.querySelector('#app').__vue__.$store.state.system.captchaRequired = true);
+  await page.evaluate(() => window.showChallenge());
+  await page.locator('iframe[title="reCAPTCHA"]').waitFor();
+  assert.equal(nektoLoads, loadsBeforeLateChallenge, 'Navigation occurred while the CAPTCHA was still loading');
   await page.waitForFunction(() => {
     const state = document.querySelector('#app')?.__vue__?.$store?.state;
     return state && !state.system.captchaRequired;
   });
   assert.equal(nektoLoads, loadsBeforeLateChallenge + 1, 'Late challenge did not return to the audio entry page once');
+  assert.deepEqual(loadingEvents.slice(-2), ['image-loaded', 'entry-load'], 'Recovery did not wait for the CAPTCHA image');
   assert.equal(relay.context, currentContext, 'Recovery changed browser identity/context');
   assert.equal(relay.page, page);
   await page.waitForFunction(() => window.nativeStarts === 1);
   await relay.entryRetryPromise;
   assert.equal(relay.forwarding, true, 'Recovered search did not resume forwarding');
+  await relay.next('fixture-native-token');
+  await relay.search('fixture-native-token');
+  assert.equal(relay.entryRetryUsed, true, 'Next/join reset the session recovery budget');
+  await page.evaluate(() => window.showChallenge());
+  await assert.rejects(relay.next('fixture-native-token'), error => error.code === 'NEKTO_VERIFICATION');
+  assert.equal(nektoLoads, loadsBeforeLateChallenge + 1, 'Next repeated the entry navigation in the same session');
+  await page.evaluate(() => {
+    document.querySelector('#app').__vue__.$store.state.system.captchaRequired = false;
+    document.querySelectorAll('iframe').forEach(frame => frame.remove());
+  });
   await page.getByRole('button', { name: 'Остановить поиск', exact: true }).click();
   await new Promise(resolve => setTimeout(resolve, 1100));
   assert.equal(await page.evaluate(() => window.nativeStarts), 1, 'Monitor restarted a manually stopped search');
@@ -133,7 +169,7 @@ try {
     assert.equal(request.headers.origin, undefined, 'Google document request received a forced Nekto Origin');
   }
   assert(requests.some(request => request.host === 'www.google.com'));
-  console.log('Browser compatibility passed: production session, native identity/crypto, scoped Google/CAPTCHA setup, one same-page challenge retry, persistent challenge preserved, manual Stop respected.');
+  console.log('Browser compatibility passed: production session, native identity/crypto, scoped Google/CAPTCHA setup, delayed widget/image loading, session-scoped retry across Next/join, persistent challenge preserved, manual Stop respected.');
 } finally {
   await baseline?.close();
   await relay?.close();

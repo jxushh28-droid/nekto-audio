@@ -100,3 +100,51 @@ test('an in-flight observation cannot re-enable a stopped session', async () => 
     assert.equal(browser.monitorTimer, null);
   } finally { release(); browser.stopSessionMonitor(); }
 });
+
+test('monitor continues after a partner leaves and respects a subsequent manual Stop', async () => {
+  const browser = new NektoBrowser(() => {});
+  let state = connected(), advances = 0;
+  const page = { isClosed: () => false,
+    evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
+      fn.name === 'confirmAudioToken' ? { reason: 'native-session-confirmed', diagnostics: identity() } : null };
+  browser.page = page; browser.searchIntent = true; browser.entryRetryUsed = true;
+  browser.advanceSearch = async (actual, token, check) => {
+    check(); assert.equal(actual, page); assert.equal(browser.entryRetryUsed, true);
+    advances++;
+    state = { ...state, searching: true, partnerConnected: false, callEnded: false };
+    browser.partnerSeen = false;
+  };
+  try {
+    browser.startSessionMonitor(page, 'fixture-token');
+    await until(() => browser.partnerSeen);
+    state.partnerConnected = false;
+    await until(() => advances === 1);
+    await until(() => browser.forwarding);
+    state.searching = false;
+    await until(() => !browser.searchIntent);
+    assert.equal(advances, 1);
+    assert.equal(browser.forwarding, false);
+  } finally { await browser.stop(); }
+});
+
+test('monitor handles a native call prompt or finished screen once, leaving unrelated prompts in place', async () => {
+  for (const kind of ['end-confirm', 'call-ended', 'finished-screen', 'report', 'unknown', 'form']) {
+    const browser = new NektoBrowser(() => {});
+    let advances = 0;
+    const state = { ...connected(), partnerConnected: false, callEnded: kind === 'finished-screen',
+      attention: kind !== 'finished-screen' };
+    const page = { isClosed: () => false,
+      evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
+        fn.name === 'confirmAudioToken' ? { reason: 'native-session-confirmed', diagnostics: identity() } :
+        fn.name === 'readAudioPrompt' ? { category: kind === 'form' ? 'end-confirm' : kind, fieldCount: kind === 'form' ? 1 : 0 } : null };
+    browser.page = page; browser.searchIntent = true;
+    browser.advanceSearch = async () => { advances++; throw Error('failed action'); };
+    try {
+      browser.startSessionMonitor(page, 'fixture-token');
+      await until(() => browser.callState);
+      // A second tick must not click again after an unsuccessful call action.
+      await new Promise(resolve => setTimeout(resolve, 550));
+      assert.equal(advances, ['end-confirm', 'call-ended', 'finished-screen'].includes(kind) ? 1 : 0, kind);
+    } finally { await browser.stop(); }
+  }
+});

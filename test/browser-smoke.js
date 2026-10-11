@@ -242,13 +242,13 @@ try {
     const store = document.body.__vue__.$store;
     store.state.chat = { activeConnectionId: 1 };
     window.nativeStarts = 0; window.nativeEnds = 0;
-    const end = document.createElement('button'); end.textContent = 'Завершить разговор';
-    const start = document.createElement('a'); start.href = '#/'; start.textContent = 'Әңгімелесушіні іздеу'; start.hidden = true;
+    const end = document.createElement('button'); end.textContent = 'Завершить';
+    const start = document.createElement('a'); start.href = '#/'; start.textContent = 'Начать поиск собеседника'; start.hidden = true;
     end.onclick = () => {
       window.nativeEnds++;
-      const modal = document.createElement('div'); modal.className = 'swal2-popup';
-      modal.textContent = 'Вы уверены, что хотите завершить разговор?';
-      const yes = document.createElement('button'); yes.textContent = 'Да';
+      const modal = document.createElement('div'); modal.className = 'swal2-popup closeDialogPopup';
+      modal.innerHTML = '<h2 class="swal2-title">У вас есть активный разговор.</h2><div class="swal2-content">Завершить?</div>';
+      const yes = document.createElement('button'); yes.className = 'swal2-confirm'; yes.textContent = 'Завершить';
       yes.onclick = () => {
         store.state.chat.activeConnectionId = null;
         setTimeout(() => { modal.remove(); end.hidden = true; start.hidden = false; }, 100);
@@ -302,6 +302,40 @@ try {
   await relaySession.next('local-test-token');
   assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [2, 2], 'Existing search was restarted');
   assert.equal(await page.evaluate(() => window.nativeCookies), 0);
+  // The current site's finished screen must restart without a Discord /next.
+  await page.evaluate(() => {
+    const store = document.body.__vue__.$store;
+    store.state.user.isSearching = false; store.state.chat.activeConnectionId = null;
+    document.querySelectorAll('button:not(#acceptCookies), a, .btn').forEach(control => control.remove());
+    const notice = document.createElement('p'); notice.className = 'callScreen__finishText'; notice.textContent = 'Собеседник завершил разговор';
+    const start = document.createElement('button'); start.className = 'callScreen__findBtn btn green filled';
+    start.textContent = 'Начать поиск собеседника';
+    start.onclick = () => { window.nativeAutoStarts = (window.nativeAutoStarts || 0) + 1;
+      store.state.user.isSearching = true; start.remove(); notice.remove(); };
+    document.body.append(notice, start);
+  });
+  await page.waitForFunction(() => window.nativeAutoStarts === 1);
+  await relaySession.callAdvancePromise;
+  assert.equal(relaySession.forwarding, true, 'Monitor did not search after the native finished-call screen');
+  assert.equal(relaySession.page, page);
+  await page.evaluate(() => {
+    const store = document.body.__vue__.$store;
+    store.state.user.isSearching = false; store.state.chat.activeConnectionId = 7;
+    const modal = document.createElement('div'); modal.className = 'swal2-popup closeDialogPopup';
+    modal.innerHTML = '<h2 class="swal2-title">У вас есть активный разговор.</h2><div class="swal2-content">Завершить?</div>';
+    const confirm = document.createElement('button'); confirm.className = 'swal2-confirm'; confirm.textContent = 'Завершить';
+    const start = document.createElement('button'); start.textContent = 'Начать поиск собеседника'; start.hidden = true;
+    start.onclick = () => { window.nativeAutoStarts++; store.state.user.isSearching = true; start.remove(); };
+    window.nativeAutoConfirms = 0;
+    confirm.onclick = () => { window.nativeAutoConfirms++; store.state.chat.activeConnectionId = null;
+      setTimeout(() => { modal.remove(); start.hidden = false; }, 100); };
+    modal.append(confirm); document.body.append(modal, start);
+  });
+  await page.waitForFunction(() => window.nativeAutoStarts === 2);
+  await relaySession.callAdvancePromise;
+  assert.equal(await page.evaluate(() => window.nativeAutoConfirms), 1, 'Monitor did not confirm the native End prompt exactly once');
+  assert.equal(relaySession.forwarding, true);
+  relaySession.stopSessionMonitor();
   // /next can arrive after the other participant leaves or with a native End
   // confirmation already open. Both cases should acknowledge once and Start.
   await page.evaluate(() => {

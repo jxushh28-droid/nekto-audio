@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readAudioPrompt } from '../src/audio-prompt.js';
 
-function read({ text = 'Укажите ваш возраст.', field = 'number', system = {}, captcha = false, ban = false } = {}) {
+function read({ text = 'Укажите ваш возраст.', field = 'number', system = {}, captcha = false, ban = false, classes = [] } = {}) {
   const shown = extra => ({ isConnected: true, checkVisibility: () => true, ...extra });
   const input = field ? shown({ type: field, tagName: field === 'select' ? 'SELECT' : 'INPUT', options: [{ textContent: 'Male' }, { textContent: 'Female' }] }) : null;
-  const popup = shown({ textContent: text, classList: { contains: () => ban },
+  const popup = shown({ textContent: text, classList: { contains: name => classes.includes(name) || (ban && name === 'banPopup') },
     querySelector: selector => selector === '.swal2-title' ? { textContent: text } :
       selector === '.swal2-confirm' ? shown({ textContent: 'Продолжить', disabled: false }) :
       selector.includes('iframe') && captcha ? {} : null,
@@ -20,6 +20,14 @@ function read({ text = 'Укажите ваш возраст.', field = 'number'
 test('the reported Russian permission-denied popup is classified as a microphone error', () => {
   const prompt = read({ text: '!Доступ к микрофону запрещен Пожалуйста разрешите доступ к микрофону.', field: null });
   assert.equal(prompt.category, 'microphone-denied'); assert.equal(prompt.visible, true);
+});
+
+test('current Nekto End prompt is recognized while a report confirmation stays unanswered', () => {
+  assert.equal(read({ text: 'У вас есть активный разговор.\nЗавершить?', field: null,
+    classes: ['closeDialogPopup'] }).category, 'end-confirm');
+  assert.equal(read({ text: 'У вас есть активный разговор.\nЗавершить?', field: null }).category, 'end-confirm');
+  assert.equal(read({ text: 'Вы уверены, что хотите завершить разговор и пожаловаться на собеседника?',
+    field: null, classes: ['reportConfirm'] }).category, 'report');
 });
 
 test('verification and restriction flags take precedence over microphone wording', () => {

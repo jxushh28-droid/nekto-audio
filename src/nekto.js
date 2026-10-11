@@ -6,6 +6,7 @@ import { audioClientReady, confirmAudioToken, authorizationError } from './live-
 import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
+import { waitForVerificationWidget } from './verification-readiness.js';
 import { observeAudioSession } from './session-observation.js';
 import { tokenExtensionScript, browserLaunchOptions } from './token-extension.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
@@ -28,6 +29,7 @@ export class NektoBrowser {
     this.protocolDiagnostics = null;
     this.monitorTimer = null; this.monitorVersion = 0;
     this.entryRetryUsed = false; this.entryRetryPromise = null; this.searchIntent = false;
+    this.partnerSeen = false; this.callAdvancePromise = null;
     this.authorization = null; this.observedStage = null;
     this.controlDiagnostics = null;
     // Each session has its own non-persistent browser context.
@@ -59,14 +61,31 @@ export class NektoBrowser {
           catch (error) {
             if (current()) {
               await this.recordSessionState(page, token, 'retry-failure', check).catch(() => {});
+              if (!current()) return;
               this.lastFailure = { code: /^NEKTO_/.test(error.code || '') ? error.code : 'NEKTO_PAGE_LOAD',
                 message: /^NEKTO_/.test(error.code || '') ? error.message : searchError('load').message };
             }
           }
           return;
         }
+        if (observed.callState.partnerConnected) this.partnerSeen = true;
+        else if (observed.callState.searching && !observed.callState.attention) this.partnerSeen = false;
+        const prompt = observed.callState.attention ? await page.evaluate(readAudioPrompt) : null;
+        check();
+        const callPrompt = ['end-confirm', 'call-ended'].includes(prompt?.category) && !prompt.fieldCount;
+        const ended = observed.callState.callEnded || (this.partnerSeen && !observed.callState.attention);
+        if (this.searchIntent && !observed.callState.verification && !observed.callState.restricted &&
+            !observed.callState.searching && !observed.callState.partnerConnected && (callPrompt || ended)) {
+          this.forwarding = false;
+          const advance = this.advanceSearch(page, token, check);
+          this.callAdvancePromise = advance;
+          try { await advance; }
+          catch { if (current()) this.searchIntent = false; } // Fail in place, without repeated prompt clicks.
+          finally { if (this.callAdvancePromise === advance) this.callAdvancePromise = null; }
+          return;
+        }
         if (!observed.callState.searching && !observed.callState.partnerConnected &&
-            !observed.callState.verification) this.searchIntent = false;
+            !observed.callState.verification && !observed.callState.attention) this.searchIntent = false;
         const forwarding = canForwardAudio(observed, captureError);
         if (forwarding !== this.forwarding) {
           console.log(JSON.stringify({ event: 'nekto_relay_transition',
@@ -124,6 +143,7 @@ export class NektoBrowser {
     this.controlDiagnostics = null;
     this.protocolDiagnostics = null;
     this.entryRetryUsed = false; this.searchIntent = true;
+    this.entryRetryPromise = null; this.partnerSeen = false; this.callAdvancePromise = null;
     const check = () => {
       if (generation !== this.generation) throw new Error('Nekto search was stopped.');
     };
@@ -276,8 +296,21 @@ export class NektoBrowser {
     }
     this.entryRetryUsed = true;
     this.forwarding = false; this.protocolDiagnostics = null;
-    console.log(JSON.stringify({ event: 'nekto_verification_retry', attempt: 1, action: 'return-to-audio-page' }));
-    const retry = this.loadAndSearch(page, token, check, setStage);
+    const retry = (async () => {
+      setStage?.('captcha-loading');
+      console.log(JSON.stringify({ event: 'nekto_verification_wait', action: 'wait-for-widget' }));
+      const readiness = await waitForVerificationWidget(page, { check });
+      check();
+      if (page !== this.page || new URL(page.url()).origin !== new URL(NEKTO_URL).origin) {
+        throw authorizationError('verification-required');
+      }
+      if (readiness === 'cleared') {
+        await advanceAudioCall(page, { check, endCurrentCall: false, authorize: () => this.authorizePage(page, token, check) });
+        return this.finishSearch(page, token, check, 'verification-cleared');
+      }
+      console.log(JSON.stringify({ event: 'nekto_verification_retry', attempt: 1, action: 'return-to-audio-page', widget: 'loaded' }));
+      return this.loadAndSearch(page, token, check, setStage);
+    })();
     this.entryRetryPromise = retry;
     try { return await retry; }
     finally { if (this.entryRetryPromise === retry) this.entryRetryPromise = null; }
@@ -289,17 +322,29 @@ export class NektoBrowser {
     const check = () => {
       if (generation !== this.generation || this.page !== page) throw new Error('Nekto search was stopped.');
     };
+    // Let a monitor-owned navigation/confirmation finish before taking control.
+    // Stopping its monitor first would cancel the widget wait midway through.
+    if (this.entryRetryPromise) await this.entryRetryPromise.catch(() => {});
+    if (this.callAdvancePromise) await this.callAdvancePromise.catch(() => {});
+    check();
     this.stopSessionMonitor();
     this.forwarding = false;
-    if (this.entryRetryPromise) await this.entryRetryPromise.catch(() => {});
-    check();
-    this.entryRetryUsed = false; this.searchIntent = true;
+    this.searchIntent = true;
+    try { return await this.advanceSearch(page, token, check, { endCurrentCall }); }
+    finally {
+      if (generation === this.generation && this.page === page && !page.isClosed()) {
+        this.startSessionMonitor(page, token, generation);
+      }
+    }
+  }
+  async authorizePage(page, token, check) {
+    const identity = await page.evaluate(confirmAudioToken, { token, timeout: 3000 });
+    check(); this.authorizationDiagnostics = identity.diagnostics || null;
+    if (!identity.ok) throw authorizationError(identity.reason);
+  }
+  async advanceSearch(page, token, check, { endCurrentCall = true } = {}) {
     try {
-      await advanceAudioCall(page, { check, endCurrentCall, authorize: async () => {
-        const identity = await page.evaluate(confirmAudioToken, { token, timeout: 3000 });
-        check(); this.authorizationDiagnostics = identity.diagnostics || null;
-        if (!identity.ok) throw authorizationError(identity.reason);
-      } });
+      await advanceAudioCall(page, { check, endCurrentCall, authorize: () => this.authorizePage(page, token, check) });
       return await this.finishSearch(page, token, check, endCurrentCall ? 'next-confirmation' : 'resume-confirmation');
     } catch (error) {
       check();
@@ -317,10 +362,6 @@ export class NektoBrowser {
         code: failure.code, ...this.callState, ...this.controlDiagnostics }));
       // Preserve failed controls and persistent challenges in the existing page.
       throw failure;
-    } finally {
-      if (generation === this.generation && this.page === page && !page.isClosed()) {
-        this.startSessionMonitor(page, token, generation);
-      }
     }
   }
   async recordSessionState(page, token, stage, check) {
@@ -349,6 +390,7 @@ export class NektoBrowser {
     check();
     if (captureError) throw Object.assign(new Error(captureError), { code: 'NEKTO_CAPTURE' });
     this.promptInfo = null; this.lastFailure = null; this.forwarding = true;
+    this.partnerSeen = this.callState.partnerConnected;
     this.authorization = identity.reason;
     this.controlDiagnostics = null;
     return this.callState.partnerConnected
@@ -381,6 +423,8 @@ export class NektoBrowser {
     this.stopSessionMonitor();
     this.generation++;
     this.searchIntent = false;
+    this.entryRetryUsed = false; this.entryRetryPromise = null;
+    this.partnerSeen = false; this.callAdvancePromise = null;
     this.forwarding = false;
     this.protocolDiagnostics = null;
     const context = this.context;

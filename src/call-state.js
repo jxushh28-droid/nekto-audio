@@ -26,9 +26,10 @@ export function readAudioCallState() {
     visible('.chat-step.scan .search_loader');
   const partnerConnected = state?.chat?.activeConnectionId != null && state?.system.isAuth === true &&
     state?.system.socketConnected === true && !verification && !restricted && !attention;
+  const callEnded = state?.chat?.activeConnectionId == null && visible('.callScreen__finishText');
   const phase = verification ? 'verification required' : restricted ? 'restricted' : attention ? 'awaiting a website prompt' :
     partnerConnected ? 'partner connected' : searching ? 'searching for a partner' : visible('#searchCompanyBtn') ? 'ready to search' : 'idle/loading';
-  return { phase, searching, partnerConnected, verification, restricted, attention };
+  return { phase, searching, partnerConnected, callEnded, verification, restricted, attention };
 }
 
 export async function waitForAudioSearch(page, { timeout = 15000, interval = 250, check = () => {} } = {}) {

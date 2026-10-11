@@ -22,6 +22,12 @@ test('native search and partner connection are separate from merely opening the 
   assert(!JSON.stringify(connected).includes('private-partner-id'));
 });
 
+test('native finished-call screen differs from a manually stopped search', () => {
+  assert.equal(read({ visible: ['.callScreen__finishText'] }).callEnded, true);
+  assert.equal(read({ visible: ['#searchCompanyBtn'] }).callEnded, false);
+  assert.equal(read({ chat: { activeConnectionId: 1 }, visible: ['.callScreen__finishText'] }).callEnded, false);
+});
+
 test('verification, restrictions and website prompts prevent a connected status', () => {
   for (const options of [{ system: { captchaRequired: true } }, { system: { forceDisconnectReason: 'private-restriction' } },
     { visible: ['#mask_bad_inet'] }, { visible: ['.swal2-popup'] }]) {
