@@ -47,6 +47,12 @@ export class NektoBrowser {
     const current = () => version === this.monitorVersion && generation === this.generation &&
       this.page === page && !page.isClosed();
     const check = () => { if (!current()) throw new Error('Nekto monitoring was stopped.'); };
+    // Search re-trigger watchdog state. nekto's search self-expires after ~5–10s
+    // without a match (the .stop-scan-button disappears and a start button returns).
+    // A human just clicks "Find" again; we must do the same or we sit in a stale
+    // "searching" state forever and never re-enter the match pool.
+    this.researchRounds = 0;
+    this.lastResearchAt = 0;
     const tick = async () => {
       if (!current()) return;
       try {
@@ -65,6 +71,26 @@ export class NektoBrowser {
           this.authorization = observed.authorizationReason;
           // A challenge may clear while the original search remains active.
           if (this.lastFailure?.code === 'NEKTO_VERIFICATION') this.lastFailure = null;
+        }
+        // Re-search watchdog: throttled to ~3s. reSearchInPage reads the real DOM
+        // (not our possibly-stale state) and decides: in a call → skip; actively
+        // searching → wait; search self-expired → re-click start. nekto's search
+        // drops after ~5–10s with no match, so without this we never re-enter the pool.
+        if (this.researchRounds <= 60 && Date.now() - this.lastResearchAt > 3000) {
+          this.lastResearchAt = Date.now();
+          const clicked = await page.evaluate(reSearchInPage);
+          check();
+          if (clicked === 'restarted') {
+            this.researchRounds++;
+            console.log(JSON.stringify({ event: 'nekto_search_restarted', round: this.researchRounds }));
+            if (this.researchRounds > 60) {
+              console.warn(JSON.stringify({ event: 'nekto_search_exhausted',
+                note: 'restarted 60x without a match — likely throttling or empty pool' }));
+            }
+          } else if (clicked === 'searching' || clicked === 'in-call') {
+            // actively searching or matched — reset the empty-pool counter
+            this.researchRounds = 0;
+          }
         }
       } catch {
         if (current()) this.forwarding = false;
@@ -400,4 +426,31 @@ export function canForwardAudio(observed, captureError) {
     d.savedTokenMatches && d.liveTokenMatches && d.identityPresent &&
     d.authenticated && d.socketConnected && !d.captcha && !d.hcaptcha &&
     !d.restricted && !d.registrationError);
+}
+
+// Runs in the page. nekto's search self-expires after ~5–10s with no match; the
+// UI drops the stop-scan control and shows a start control again. We detect that
+// and re-click start, exactly as a human re-clicks "Find". Returns:
+//   'in-call'   — a partner is connected (cancel-call control visible); do nothing
+//   'searching' — still actively searching (stop-scan control visible); wait
+//   'restarted' — search had stopped; we re-clicked a start control
+//   'idle'      — no actionable control found this tick
+export function reSearchInPage() {
+  const vis = (e) => !!e && e.offsetParent !== null;
+  const q = (sel) => document.querySelector(sel);
+  if (vis(q('.callScreen__cancelCallBtn'))) return 'in-call';
+  // Active-search indicators (any one counts).
+  if (vis(q('.stop-scan-button')) || vis(q('#stopSearchBtn'))) return 'searching';
+  // Find a start control and click it.
+  const all = Array.from(document.querySelectorAll('button, .btn'));
+  const byText = all.find((b) => /начать разговор|начать поиск|найти собеседник|start|find/i.test((b.innerText || '').trim()));
+  const cand =
+    q('.go-search-button') ||
+    q('#searchCompanyBtn') ||
+    q('.callScreen__findBtn') ||
+    q('.btnNekto') ||
+    byText ||
+    null;
+  if (vis(cand)) { cand.click(); return 'restarted'; }
+  return 'idle';
 }
