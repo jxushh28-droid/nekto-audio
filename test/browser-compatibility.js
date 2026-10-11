@@ -23,7 +23,7 @@ try {
     await context.route('**/*', async route => {
       const request = route.request();
       requests.push({ host: new URL(request.url()).hostname, headers: request.headers() });
-      await route.fulfill({ contentType: 'text/html', body: `<!doctype html>
+      await route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html>
         <div id="app"><button id="searchCompanyBtn">Начать разговор</button>
         <button id="manual-stop">Остановить поиск</button></div>
         <script>
