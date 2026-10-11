@@ -4,43 +4,62 @@ import vm from 'node:vm';
 import { mkdtemp, readFile, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { tokenExtensionScript, writeTokenExtension } from '../src/token-extension.js';
+import { tokenExtensionScript, writeTokenExtension, browserLaunchOptions } from '../src/token-extension.js';
 
 test('extension preserves existing settings and skips an already matching token', () => {
   let saved = JSON.stringify({ settings: { theme: 'dark' }, user: { authToken: 'old', openChats: 6 } }), writes = 0;
-  const context = { localStorage: { getItem: () => saved, setItem: (_, value) => { writes++; saved = value; } },
+  const context = { location: { origin: 'https://nekto-me.kz' }, localStorage: { getItem: () => saved, setItem: (_, value) => { writes++; saved = value; } },
     document: { addEventListener() { throw Error('Unexpected retry'); } } };
   vm.runInNewContext(tokenExtensionScript('next-token'), context);
-  assert.deepEqual(JSON.parse(saved), { settings: { theme: 'dark', cookiesAccepted: true }, user: { authToken: 'next-token', openChats: 6 } });
+  assert.deepEqual(JSON.parse(saved), { settings: { theme: 'dark' }, user: { authToken: 'next-token', openChats: 6 } });
   vm.runInNewContext(tokenExtensionScript('next-token'), context);
   assert.equal(writes, 1);
 });
 
-test('extension writes cookiesAccepted even when token already matches but flag is missing', () => {
-  // Regression: old code early-returned on token match without checking cookiesAccepted.
-  // Persistent profile can have the correct token but no cookiesAccepted from a prior version.
-  // Without this write, nekto connects WS before the consent flag is set → server sends captcha-request.
+test('a matching token leaves consent and other storage untouched', () => {
   let saved = JSON.stringify({ user: { authToken: 'my-token' } }), writes = 0;
-  const context = { localStorage: { getItem: () => saved, setItem: (_, value) => { writes++; saved = value; } },
+  const context = { location: { origin: 'https://nekto-me.kz' }, localStorage: { getItem: () => saved, setItem: (_, value) => { writes++; saved = value; } },
     document: { addEventListener() { throw Error('Unexpected retry'); } } };
   vm.runInNewContext(tokenExtensionScript('my-token'), context);
-  assert.equal(writes, 1, 'must write even though token already matches');
-  assert.equal(JSON.parse(saved)?.settings?.cookiesAccepted, true, 'must set cookiesAccepted');
-  // Second run — both conditions now satisfied — should not write again.
+  assert.equal(writes, 0);
+  assert.deepEqual(JSON.parse(saved), { user: { authToken: 'my-token' } });
   vm.runInNewContext(tokenExtensionScript('my-token'), context);
-  assert.equal(writes, 1, 'must not write a second time once fully correct');
+  assert.equal(writes, 0);
 });
 
 test('extension retains the uploaded readystatechange retry and safely quotes runtime tokens', () => {
   let saved = 'broken', retry;
   const token = 'fixture";globalThis.executed=true;\\\n';
-  const context = { localStorage: { getItem: () => saved, setItem: (_, value) => { saved = value; } },
+  const context = { location: { origin: 'https://nekto-me.kz' }, localStorage: { getItem: () => saved, setItem: (_, value) => { saved = value; } },
     document: { addEventListener(name, callback, options) {
       assert.equal(name, 'readystatechange'); assert.equal(options.once, true); retry = callback;
     } } };
   vm.runInNewContext(tokenExtensionScript(token), context);
   assert.equal(typeof retry, 'function'); saved = '{}'; retry();
   assert.equal(JSON.parse(saved).user.authToken, token); assert.equal(context.executed, undefined);
+});
+
+test('token init script ignores Google, CAPTCHA frames, lookalike hosts and other origins', () => {
+  for (const origin of ['https://www.google.com', 'https://www.google.com/recaptcha', 'https://www.gstatic.com',
+    'https://hcaptcha.com', 'https://nekto-me.kz.evil.invalid', 'http://nekto-me.kz', 'null']) {
+    vm.runInNewContext(tokenExtensionScript('fixture-secret'), {
+      location: { origin },
+      localStorage: { getItem() { throw Error('Third-party storage was accessed'); } },
+      document: { addEventListener() { throw Error('Third-party listener was added'); } },
+    });
+  }
+});
+
+test('Windows uses visible installed Chrome; Railway and displayless Linux use bundled headless Chromium', () => {
+  const local = browserLaunchOptions('fixture.wav', { env: {}, platform: 'win32' });
+  assert.equal(local.channel, 'chrome'); assert.equal(local.headless, false);
+  assert(!local.args.includes('--no-sandbox'));
+  for (const env of [{ RAILWAY_PROJECT_ID: 'fixture' }, {}]) {
+    const server = browserLaunchOptions('fixture.wav', { env, platform: 'linux' });
+    assert.equal(server.channel, 'chromium'); assert.equal(server.headless, true);
+  }
+  const explicit = browserLaunchOptions(null, { env: { NEKTO_HEADLESS: '0', NEKTO_BROWSER_CHANNEL: 'chrome' }, platform: 'linux' });
+  assert.equal(explicit.channel, 'chrome'); assert.equal(explicit.headless, false);
 });
 
 test('generated extension matches the uploaded manifest and updates tokens in private files', async () => {

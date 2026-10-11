@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test test/*.test.js",
-    "test:browser": "node test/browser-smoke.js"
+    "test:browser": "node test/browser-smoke.js && node test/browser-compatibility.js"
   },
   "dependencies": {
     "@discordjs/voice": "0.19.2",

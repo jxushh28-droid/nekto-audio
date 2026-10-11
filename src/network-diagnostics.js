@@ -159,7 +159,7 @@ export function installVerificationObserver({ origin } = {}) {
   return window.__nektoVerificationObserver?.snapshot() || null;
 }
 
-export async function attachNektoDiagnostics(page, token, { current = () => true, log = report => console.log(JSON.stringify(report)), onProtocol = () => {}, origin = 'https://nekto-me.kz' } = {}) {
+export async function attachNektoDiagnostics(page, token, { current = () => true, log = report => console.log(JSON.stringify(report)), onProtocol = () => {}, origin = 'https://nekto-me.kz', protocol = false } = {}) {
   const emit = report => { if (current()) log(report); };
   page.on('requestfailed', request => {
     const target = classifyNektoRequest(request.url());
@@ -200,6 +200,8 @@ export async function attachNektoDiagnostics(page, token, { current = () => true
     const safe = sanitizeProtocolReport(report);
     if (safe) { onProtocol(safe); emit({ event: 'nekto_protocol', ...safe }); }
   });
-  await page.addInitScript({ content: protocolObserverScript({ origin, token }) });
+  // WebCrypto observation changes method identity even though bytes are unchanged.
+  // Keep native crypto by default; enable this temporary observer only for tracing.
+  if (protocol) await page.addInitScript({ content: protocolObserverScript({ origin, token }) });
   await page.addInitScript(installVerificationObserver, { origin });
 }

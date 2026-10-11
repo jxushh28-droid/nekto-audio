@@ -1,15 +1,13 @@
 import { chromium } from 'playwright';
 import { resolve } from 'node:path';
-import { createHash } from 'node:crypto';
 import { installBrowserRelay, inspectBrowserMicrophone } from './browser-init.js';
-import { installAntiDetect } from './anti-detect.js';
 import { searchError } from './search-error.js';
 import { audioClientReady, confirmAudioToken, authorizationError } from './live-session.js';
 import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
-import { tokenExtensionScript, browserLaunchOptions, generateFingerprint, fpSeed, windowsClientHints } from './token-extension.js';
+import { tokenExtensionScript, browserLaunchOptions } from './token-extension.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
 import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificationReport } from './network-diagnostics.js';
@@ -31,8 +29,7 @@ export class NektoBrowser {
     this.monitorTimer = null; this.monitorVersion = 0;
     this.authorization = null; this.observedStage = null;
     this.controlDiagnostics = null;
-    // No persistent profile path — each session gets a fresh browser.newContext() (incognito).
-    // This prevents ban fingerprints from accumulating in IndexedDB / localStorage across restarts.
+    // Each session has its own non-persistent browser context.
     this.microphonePath = resolve(directory, 'silent-microphone.wav');
   }
 
@@ -47,12 +44,6 @@ export class NektoBrowser {
     const current = () => version === this.monitorVersion && generation === this.generation &&
       this.page === page && !page.isClosed();
     const check = () => { if (!current()) throw new Error('Nekto monitoring was stopped.'); };
-    // Search re-trigger watchdog state. nekto's search self-expires after ~5–10s
-    // without a match (the .stop-scan-button disappears and a start button returns).
-    // A human just clicks "Find" again; we must do the same or we sit in a stale
-    // "searching" state forever and never re-enter the match pool.
-    this.researchRounds = 0;
-    this.lastResearchAt = 0;
     const tick = async () => {
       if (!current()) return;
       try {
@@ -72,26 +63,6 @@ export class NektoBrowser {
           // A challenge may clear while the original search remains active.
           if (this.lastFailure?.code === 'NEKTO_VERIFICATION') this.lastFailure = null;
         }
-        // Re-search watchdog: throttled to ~3s. reSearchInPage reads the real DOM
-        // (not our possibly-stale state) and decides: in a call → skip; actively
-        // searching → wait; search self-expired → re-click start. nekto's search
-        // drops after ~5–10s with no match, so without this we never re-enter the pool.
-        if (this.researchRounds <= 60 && Date.now() - this.lastResearchAt > 3000) {
-          this.lastResearchAt = Date.now();
-          const clicked = await page.evaluate(reSearchInPage);
-          check();
-          if (clicked === 'restarted') {
-            this.researchRounds++;
-            console.log(JSON.stringify({ event: 'nekto_search_restarted', round: this.researchRounds }));
-            if (this.researchRounds > 60) {
-              console.warn(JSON.stringify({ event: 'nekto_search_exhausted',
-                note: 'restarted 60x without a match — likely throttling or empty pool' }));
-            }
-          } else if (clicked === 'searching' || clicked === 'in-call') {
-            // actively searching or matched — reset the empty-pool counter
-            this.researchRounds = 0;
-          }
-        }
       } catch {
         if (current()) this.forwarding = false;
       } finally {
@@ -107,8 +78,7 @@ export class NektoBrowser {
 
   async launch(token = '') {
     // Launch the browser process once and keep it alive across sessions.
-    // Each openSession() creates a fresh incognito context (browser.newContext()) so
-    // there is no localStorage / IndexedDB / cookie accumulation between sessions.
+    // Each openSession() creates an isolated incognito context.
     if (this.browser?.isConnected()) return this.browser;
     await writeSilentMicrophone(this.microphonePath);
     const opts = browserLaunchOptions(this.microphonePath);
@@ -117,9 +87,9 @@ export class NektoBrowser {
     } catch (error) {
       // Real Chrome (channel: 'chrome') may not be installed; fall back to the
       // bundled Chromium so the bot still runs.
-      if (opts.channel && opts.channel !== 'chromium') {
+      if (opts.channel === 'chrome' && /not found|does(?:n't| not) exist/i.test(error?.message || '')) {
         console.warn(JSON.stringify({ event: 'nekto_chrome_unavailable',
-          channel: opts.channel, fallback: 'chromium', error: String(error?.message || error).slice(0, 200) }));
+          channel: opts.channel, fallback: 'chromium' }));
         this.browser = await chromium.launch({ ...opts, channel: 'chromium' });
       } else throw error;
     }
@@ -146,34 +116,20 @@ export class NektoBrowser {
     try {
       if (previous) await previous.close().catch(() => {});
       check();
-      // Get (or start) the browser process, then open a fresh incognito context.
-      // Each session starts completely clean — no stored cookies, localStorage or
-      // IndexedDB from previous sessions. Token + fingerprint are injected via
-      // addInitScript below instead of a Chrome extension.
+      // Use the native UA, Client Hints, GPU, plugins, audio and screen.
+      // Chromium supplies the correct Origin on the actual .kz page; global
+      // extra headers would also alter Google/CAPTCHA and other-site requests.
       const browser = await this.launch(token);
       check();
-      // Fingerprint spoofing is OPT-IN (NEKTO_SPOOF_FP=1). It was written for a
-      // headless LINUX SERVER, where the real fingerprint screams "Linux/VM". Run
-      // LOCALLY on a real machine, the same spoofing instead fights the machine's
-      // own consistent fingerprint (Windows UA over a real GPU, fake NVIDIA over
-      // real WebGL extensions, perturbed canvas/audio) → a contradictory Frankenstein
-      // fingerprint nekto can phantom-ban. A real browser + token alone matches fine,
-      // so by default we leave the real local fingerprint untouched.
-      const spoofFp = process.env.NEKTO_SPOOF_FP === '1';
-      const { userAgent } = generateFingerprint(token);
-      context = await browser.newContext(spoofFp ? { userAgent } : {});
+      context = await browser.newContext({ viewport: null });
       await context.grantPermissions(['microphone'], { origin: new URL(NEKTO_URL).origin });
-      // Always set Origin. Only force Windows Client-Hints when spoofing (otherwise
-      // the real platform hints are correct and consistent with the real UA).
-      await context.setExtraHTTPHeaders(spoofFp
-        ? { 'origin': 'https://nekto-me.kz', ...windowsClientHints(token) }
-        : { 'origin': 'https://nekto-me.kz' });
       check();
       this.context = context;
       const page = await context.newPage();
       check();
       this.page = page;
       await attachNektoDiagnostics(page, token, {
+        protocol: process.env.NEKTO_PROTOCOL_DIAGNOSTICS === '1',
         current: () => generation === this.generation && this.page === page,
         onProtocol: report => {
           this.protocolDiagnostics = updateProtocolSummary(this.protocolDiagnostics, report);
@@ -181,9 +137,7 @@ export class NektoBrowser {
           // right token is being sent and whether the server accepted it.
           if (report.direction === 'encrypt' && report.type === 'register') {
             console.log(JSON.stringify({ event: 'nekto_register_sent',
-              credentialField: report.credentialField, credentialMatches: report.credentialMatches,
-              hasGumHash: report.hasGumHash, hasFpt: report.hasFpt,
-              hasCanvas: report.hasCanvas, hasPlugins: report.hasPlugins, hasDuration: report.hasDuration }));
+              credentialField: report.credentialField, credentialMatches: report.credentialMatches }));
           }
           if (report.direction === 'decrypt' && report.type === 'registered') {
             console.log(JSON.stringify({ event: 'nekto_register_response', success: report.success }));
@@ -208,20 +162,8 @@ export class NektoBrowser {
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
       });
       await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
-      // Token injection: always writes authToken to localStorage at document_start.
-      // navigator/screen/Intl spoof only when spoofFp (it forces a Windows identity
-      // that conflicts with the real local machine otherwise).
-      await page.addInitScript({ content: tokenExtensionScript(token, spoofFp) });
-      // Anti-detection. Always-on: navigator.webdriver removal, window.chrome,
-      // navigator.plugins, fpt=md5(token) WS swap, cookie/tab handling — these hide
-      // automation without contradicting a real fingerprint. The fingerprint spoofs
-      // (WebGL/canvas/audio/WebGPU/userAgentData) run only when spoofFp=true.
-      await page.addInitScript(installAntiDetect, {
-        fptHash: createHash('md5').update(token || '').digest('hex'),
-        fpSeed: fpSeed(token || ''),
-        gumHash: createHash('sha256').update((token || '') + '-gum').digest('hex'),
-        spoofFp,
-      });
+      // Guard every navigation/frame: only the Nekto origin receives the token.
+      await page.addInitScript({ content: tokenExtensionScript(token) });
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       stage = 'load';
       // Fresh incognito context — no storage clear needed (context.newContext() starts empty).
@@ -445,49 +387,4 @@ export function canForwardAudio(observed, captureError) {
     d.savedTokenMatches && d.liveTokenMatches && d.identityPresent &&
     d.authenticated && d.socketConnected && !d.captcha && !d.hcaptcha &&
     !d.restricted && !d.registrationError);
-}
-
-// Runs in the page. nekto's search self-expires after ~5–10s with no match; the
-// UI drops the stop-scan control and shows a start control again. We detect that
-// and re-click start, exactly as a human re-clicks "Find". Returns:
-//   'in-call'   — a partner is connected (cancel-call control visible); do nothing
-//   'searching' — still actively searching (stop-scan control visible); wait
-//   'restarted' — search had stopped; we re-clicked a start control
-//   'idle'      — no actionable control found this tick
-export function reSearchInPage() {
-  const vis = (e) => !!e && e.offsetParent !== null;
-  const q = (sel) => document.querySelector(sel);
-  if (vis(q('.callScreen__cancelCallBtn'))) return 'in-call';
-  // Active-search indicators (any one counts).
-  if (vis(q('.stop-scan-button')) || vis(q('#stopSearchBtn'))) return 'searching';
-  // Set the broadest criteria before starting so the match pool is maximal: my
-  // sex = any (".any"), partner sex = any, all partner age groups selected. The
-  // reference always applies criteria before searching; a fresh session that
-  // searches with narrow/unset criteria can match nobody → infinite search.
-  try {
-    const sexPanels = Array.from(document.querySelectorAll('.sex-buttons-panel'));
-    for (const panel of sexPanels) {
-      const anyBtn = panel.querySelector('.any');
-      if (anyBtn && !/checked/.test(anyBtn.className)) anyBtn.click();
-    }
-    const agePanels = Array.from(document.querySelectorAll('.s-age'));
-    const peerAgePanel = agePanels[1] || agePanels[0];
-    if (peerAgePanel) {
-      for (const b of Array.from(peerAgePanel.querySelectorAll('button'))) {
-        if (!/checked/.test(b.className)) b.click();
-      }
-    }
-  } catch (_) {}
-  // Find a start control and click it.
-  const all = Array.from(document.querySelectorAll('button, .btn'));
-  const byText = all.find((b) => /начать разговор|начать поиск|найти собеседник|start|find/i.test((b.innerText || '').trim()));
-  const cand =
-    q('.go-search-button') ||
-    q('#searchCompanyBtn') ||
-    q('.callScreen__findBtn') ||
-    q('.btnNekto') ||
-    byText ||
-    null;
-  if (vis(cand)) { cand.click(); return 'restarted'; }
-  return 'idle';
 }

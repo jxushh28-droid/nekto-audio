@@ -36,6 +36,13 @@ test('untrusted page reports cannot log opaque strings or add credential content
   assert.deepEqual(safe, { direction: 'encrypt', type: 'register', credentialField: 'none', credentialMatches: false });
   assert.equal(sanitizeProtocolReport({ direction: 'decrypt', type: 'fixture-secret' }), null);
   assert.equal(sanitizeProtocolReport({ direction: 'decrypt', type: 'scan-for-peer', searchToken: 'fixture-secret' }).searchToken, 'other');
+  const challenge = sanitizeProtocolReport({ direction: 'decrypt', type: 'captcha-request',
+    captchaVariant: 'fixture-secret', captchaFields: 'fixture-secret,url', authToken: 'fixture-secret' });
+  assert.deepEqual(challenge, { direction: 'decrypt', type: 'captcha-request', captchaVariant: 'unknown', captchaFields: 'url' });
+  const decoded = describeProtocolMessage(JSON.stringify({ type: 'captcha-request', captchaType: 'RECAPTCHA',
+    'fixture-secret': 'private', url: 'fixture-private-url' }), '', 'decrypt');
+  assert.equal(decoded.captchaVariant, 'recaptcha');
+  assert(!JSON.stringify(decoded).includes('fixture-'));
 });
 
 test('status summary separates observed input from server reply and challenge', () => {

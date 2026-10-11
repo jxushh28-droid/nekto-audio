@@ -117,15 +117,8 @@ export function installBrowserRelay({ origin }) {
     } catch {} finally { sampling = false; }
   }, 1000);
   window.addEventListener('pagehide', () => clearInterval(diagnosticsTimer), { once: true });
-  // IMPORTANT: Do NOT replace window.RTCPeerConnection (constructor). nekto's
-  // fingerprint module builds a "pristine realm" (a clean iframe) and compares
-  // toString(window.RTCPeerConnection) against the iframe's untampered native
-  // constructor. Any Proxy/subclass/wrapper of the global constructor mismatches
-  // → rtc.mismatch=true → bot flagged in the scan-for-peer payload → ban at search.
-  //
-  // Instead we patch two PROTOTYPE methods (setLocalDescription / setRemoteDescription)
-  // which the fingerprint does NOT native-check. Registering on both guarantees the
-  // peer is tracked before any 'track' event fires, for either caller/callee role.
+  // Observe peers while preserving the native RTCPeerConnection constructor
+  // and microphone APIs. Description hooks capture either caller/callee role.
   const RTC = window.RTCPeerConnection;
   if (RTC && RTC.prototype) {
     const seen = new WeakSet();
@@ -154,16 +147,6 @@ export function installBrowserRelay({ origin }) {
       });
       peer.addEventListener('connectionstatechange', () => cleanup(peer));
     };
-    // Keep the OUTGOING mic track enabled. nekto flags a peer-mute if the local
-    // audio track is disabled/muted — the reference (inject.ts) force-enables it
-    // on addTrack and re-asserts every 2s. Ported here as a prototype patch.
-    const forceLocal = (track) => {
-      if (!track || track.kind !== 'audio') return;
-      try { track.enabled = true; } catch (_) {}
-      try { setInterval(() => { try { track.enabled = true; } catch (_) {} }, 2000); } catch (_) {}
-    };
-    // Patch prototype methods in place. These wrappers are plain functions; the
-    // fingerprint only native-checks the constructor, getUserMedia and localStorage.getItem.
     const patch = (name) => {
       const orig = RTC.prototype[name];
       if (typeof orig !== 'function') return;
@@ -174,11 +157,11 @@ export function installBrowserRelay({ origin }) {
     };
     patch('setLocalDescription');
     patch('setRemoteDescription');
-    // addTrack: register peer + force-enable the outgoing track.
+    // Register senders without changing their enabled/mute state.
     const origAddTrack = RTC.prototype.addTrack;
     if (typeof origAddTrack === 'function') {
       RTC.prototype.addTrack = function(track, ...streams) {
-        try { registerPeer(this); forceLocal(track); } catch (_) {}
+        try { registerPeer(this); } catch (_) {}
         return origAddTrack.call(this, track, ...streams);
       };
     }

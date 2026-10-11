@@ -14,15 +14,6 @@ export function describeProtocolMessage(plaintext, token, direction) {
       typeof message.userId === 'string' ? 'userId' : 'none';
     report.credentialField = field;
     report.credentialMatches = field !== 'none' && !!token && message[field] === token;
-    // Log which top-level keys were sent (no values) so we can verify payload shape
-    report.registerFields = Object.keys(message).filter(k => k !== field && k !== 'type').slice(0, 24).join(',');
-    // Flag if suspicious bot-tell fields are still present after anti-detect hook
-    report.hasFpt = typeof message.fpt === 'string';
-    report.hasGumHash = typeof message.gumHash === 'string';
-    report.hasCanvas = Object.hasOwn(message, 'canvas');
-    report.hasPlugins = Object.hasOwn(message, 'plugins');
-    report.hasDuration = Object.hasOwn(message, 'duration');
-    report.deviceInfoHasUa = !!(message.deviceInfo && (message.deviceInfo.ua || message.deviceInfo['user-agent']));
   }
   if (message.type === 'scan-for-peer') {
     report.searchToken = !Object.hasOwn(message, 'token') ? 'missing' :
@@ -39,9 +30,9 @@ export function describeProtocolMessage(plaintext, token, direction) {
     const variant = typeof message.captchaType === 'string' ? message.captchaType :
       typeof message.variant === 'string' ? message.variant :
       message.recaptcha ? 'recaptcha' : message.hcaptcha ? 'hcaptcha' : 'unknown';
-    report.captchaVariant = variant.slice(0, 32);
-    // Log which top-level keys were present (without values) for protocol archaeology.
-    report.captchaFields = Object.keys(message).filter(k => k !== 'type').slice(0, 16).join(',');
+    report.captchaVariant = ['recaptcha', 'hcaptcha'].includes(variant.toLowerCase()) ? variant.toLowerCase() : 'unknown';
+    report.captchaFields = ['leftChats', 'needChats', 'report', 'captchaType', 'url']
+      .filter(key => Object.hasOwn(message, key)).join(',');
   }
   return report;
 }
@@ -56,23 +47,15 @@ export function sanitizeProtocolReport(report) {
     safe.credentialField = ['authToken', 'userId', 'none'].includes(report.credentialField) ?
       report.credentialField : 'none';
     safe.credentialMatches = report.credentialMatches === true;
-    if (typeof report.registerFields === 'string') safe.registerFields = report.registerFields.slice(0, 256);
-    safe.hasFpt = report.hasFpt === true;
-    safe.hasGumHash = report.hasGumHash === true;
-    safe.hasCanvas = report.hasCanvas === true;
-    safe.hasPlugins = report.hasPlugins === true;
-    safe.hasDuration = report.hasDuration === true;
-    safe.deviceInfoHasUa = report.deviceInfoHasUa === true;
   }
   if (report.type === 'scan-for-peer') safe.searchToken =
     ['missing', 'null', 'empty', 'present', 'other'].includes(report.searchToken) ? report.searchToken : 'other';
   if (report.type === 'registered') safe.success =
     ['true', 'false', 'unspecified'].includes(report.success) ? report.success : 'unspecified';
   if (report.type === 'captcha-request') {
-    safe.captchaVariant = typeof report.captchaVariant === 'string' ?
-      report.captchaVariant.slice(0, 32) : 'unknown';
-    safe.captchaFields = typeof report.captchaFields === 'string' ?
-      report.captchaFields.slice(0, 256) : '';
+    safe.captchaVariant = ['recaptcha', 'hcaptcha'].includes(report.captchaVariant) ? report.captchaVariant : 'unknown';
+    const fields = typeof report.captchaFields === 'string' ? report.captchaFields.slice(0, 256).split(',') : [];
+    safe.captchaFields = ['leftChats', 'needChats', 'report', 'captchaType', 'url'].filter(key => fields.includes(key)).join(',');
   }
   return safe;
 }

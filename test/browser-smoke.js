@@ -34,14 +34,14 @@ const silentMicrophonePath = join(directory, 'silent-microphone.wav');
 let context;
 try {
   await writeSilentMicrophone(silentMicrophonePath);
-  await writeTokenExtension(extensionPath, 'local-test-token', { matches: ['http://127.0.0.1/*'] });
+  await writeTokenExtension(extensionPath, 'local-test-token', { matches: ['http://127.0.0.1/*'], origins: [origin] });
   context = await chromium.launchPersistentContext(profilePath, {
     ...extensionBrowserOptions(extensionPath, silentMicrophonePath), executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
   });
   await context.grantPermissions(['microphone'], { origin });
   const page = await context.newPage();
   const diagnosticReports = [];
-  await attachNektoDiagnostics(page, 'local-test-token', { origin, log: report => diagnosticReports.push(report) });
+  await attachNektoDiagnostics(page, 'local-test-token', { origin, protocol: true, log: report => diagnosticReports.push(report) });
   const frames = [];
   await page.exposeBinding('pushNektoAudio', (_, base64) => frames.push(Buffer.from(base64, 'base64')));
   await page.addInitScript({ content: `
@@ -342,14 +342,16 @@ try {
     window.testAudio = audio; window.testTone = source;
     const prototype = RTCPeerConnection.prototype;
     const nativeAdd = prototype.addEventListener;
-    if (suppressTrackEvents) prototype.addEventListener = function(type, ...args) {
-      if (type !== 'track') return nativeAdd.call(this, type, ...args);
-    };
-    let sender, receiver;
-    try {
-      sender = new RTCPeerConnection({ iceServers: [] });
-      receiver = new RTCPeerConnection({ iceServers: [] });
-    } finally { prototype.addEventListener = nativeAdd; }
+    const sender = new RTCPeerConnection({ iceServers: [] });
+    const receiver = new RTCPeerConnection({ iceServers: [] });
+    // Peers are observed at addTrack/description time, not construction time.
+    // Filter track listeners on these peers throughout registration so recovery
+    // is exercised even when the initial track event is genuinely missed.
+    if (suppressTrackEvents) for (const peer of [sender, receiver]) {
+      peer.addEventListener = function(type, ...args) {
+        if (type !== 'track') return nativeAdd.call(this, type, ...args);
+      };
+    }
     window.testPeers = [sender, receiver];
     sender.addTrack(output.stream.getAudioTracks()[0], output.stream);
     const toReceiver = []; const toSender = [];
@@ -369,6 +371,7 @@ try {
     await receiver.setLocalDescription(await receiver.createAnswer());
     await sender.setRemoteDescription(receiver.localDescription);
     for (const candidate of toSender) await sender.addIceCandidate(candidate);
+    if (suppressTrackEvents) for (const peer of [sender, receiver]) delete peer.addEventListener;
   };
   await page.evaluate(connectLoopback, false);
   await page.waitForFunction(() => window.testPeers.every(peer => peer.connectionState === 'connected'), null, { timeout: 10000 });
@@ -426,7 +429,7 @@ try {
   await context.close(); context = null;
   await symlink('fixture-previous-container-12345', join(profilePath, 'SingletonLock'));
   assert.equal(await recoverRailwayProfileLock(profilePath, { railwayRuntime: true, expectedDirectory: profilePath }), true);
-  await writeTokenExtension(extensionPath, 'replacement-test-token', { matches: ['http://127.0.0.1/*'] });
+  await writeTokenExtension(extensionPath, 'replacement-test-token', { matches: ['http://127.0.0.1/*'], origins: [origin] });
   context = await chromium.launchPersistentContext(profilePath, {
     ...extensionBrowserOptions(extensionPath, silentMicrophonePath), executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
   });

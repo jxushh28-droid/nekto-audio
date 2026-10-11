@@ -1,132 +1,14 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-/**
- * Deterministic per-token Windows fingerprint.
- * Same token → same fingerprint every restart. Different token → different fingerprint.
- * Uses FNV-1a 32-bit hash of the token as the PRNG seed (Xorshift32).
- */
-export function generateFingerprint(token) {
-  // FNV-1a 32-bit hash as seed
-  let h = 2166136261;
-  for (let i = 0; i < token.length; i++) {
-    h ^= token.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  // Xorshift32
-  let s = h || 1;
-  const rand = () => {
-    s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s >>>= 0;
-    return s / 4294967296;
-  };
-  const pick = arr => arr[Math.floor(rand() * arr.length)];
-
-  const chromeVersions = [
-    '120.0.6099.130', '121.0.6167.184', '122.0.6261.129', '123.0.6312.122',
-    '124.0.6367.207', '125.0.6422.142', '126.0.6478.234', '127.0.6533.120',
-    '128.0.6613.138',
-  ];
-  const screens = [
-    [1920, 1080], [2560, 1440], [1366, 768], [1536, 864],
-    [1440, 900], [1280, 720], [1600, 900],
-  ];
-  const memories       = [4, 8];
-  const concurrencies  = [4, 8, 12, 16];
-  const timezones      = ['Europe/Moscow', 'Europe/Samara', 'Europe/Volgograd',
-                          'Europe/Saratov', 'Europe/Ulyanovsk', 'Europe/Kirov'];
-  const languages      = ['ru-RU', 'en-US'];
-
-  const chrome  = pick(chromeVersions);
-  const [sw, sh] = pick(screens);
-  const lang    = pick(languages);
-  const tz      = pick(timezones);
-  const mem     = pick(memories);
-  const hw      = pick(concurrencies);
-
-  return {
-    userAgent: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`,
-    platform: 'Win32',
-    language: lang,
-    timezone: tz,
-    deviceMemory: mem,
-    hardwareConcurrency: hw,
-    screen: { width: sw, height: sh, availHeight: sh - 40 },
-    chromeMajor: chrome.split('.')[0],
-  };
-}
-
-/**
- * HTTP Client-Hints headers matching the token's Windows fingerprint.
- * CRITICAL: Playwright's context.userAgent spoofs navigator.userAgent and the
- * User-Agent header, but NOT the Sec-CH-UA* client-hint headers. Chromium keeps
- * sending Sec-CH-UA-Platform: "Linux" from the real OS, which nekto reads
- * server-side and uses to silently exclude the session from matching (the
- * reference documents "nekto silently bans the Linux platform from matching").
- * We force these headers to Windows so the HTTP layer matches navigator.
- */
-export function windowsClientHints(token) {
-  const { chromeMajor } = generateFingerprint(token);
-  const v = chromeMajor || '128';
-  return {
-    'sec-ch-ua': `"Chromium";v="${v}", "Google Chrome";v="${v}", "Not=A?Brand";v="24"`,
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
-  };
-}
-
-/**
- * FNV-1a 32-bit hash of the token — used as LCG seed for canvas noise.
- * Must match the fpSeed() function in the TS source (inject.ts / NektoBrowserClient.ts).
- */
-export function fpSeed(token) {
-  let h = 2166136261;
-  for (let i = 0; i < token.length; i++) {
-    h ^= token.charCodeAt(i);
-    h = Math.imul(h, 16777619) >>> 0;
-  }
-  return h || 1;
-}
-
-/** Builds an IIFE that overrides navigator/screen/Intl properties before the page runs. */
-function fingerprintSpoofScript(fp) {
-  const data = JSON.stringify(fp);
-  return `(function(){
-  if(typeof navigator==='undefined'||typeof screen==='undefined')return;
-  var fp=${data};
-  function def(obj,prop,val){try{Object.defineProperty(obj,prop,{get:function(){return val;},configurable:true});}catch(e){}}
-  def(navigator,'platform',fp.platform);
-  def(navigator,'userAgent',fp.userAgent);
-  def(navigator,'appVersion',fp.userAgent.replace('Mozilla/',''));
-  def(navigator,'language',fp.language);
-  def(navigator,'languages',Object.freeze([fp.language,fp.language.split('-')[0]]));
-  def(navigator,'deviceMemory',fp.deviceMemory);
-  def(navigator,'hardwareConcurrency',fp.hardwareConcurrency);
-  def(screen,'width',fp.screen.width);
-  def(screen,'height',fp.screen.height);
-  def(screen,'availWidth',fp.screen.width);
-  def(screen,'availHeight',fp.screen.availHeight);
-  def(screen,'colorDepth',24);
-  def(screen,'pixelDepth',24);
-  var NDTF=Intl.DateTimeFormat;
-  var PDTF=function(l,o){o=Object.assign({},o||{});if(!o.timeZone)o.timeZone=fp.timezone;return new NDTF(l,o);};
-  PDTF.supportedLocalesOf=NDTF.supportedLocalesOf.bind(NDTF);
-  try{Object.defineProperty(Intl,'DateTimeFormat',{value:PDTF,configurable:true,writable:true});}catch(e){}
-})();`;
-}
-
-export function tokenExtensionScript(token, spoofFp = false) {
-  const fp = generateFingerprint(token);
-  // fingerprintSpoofScript (navigator/screen/Intl → Windows) runs first ONLY when
-  // spoofFp — otherwise it forces a Windows identity that contradicts the real local
-  // machine (and the real GPU/fonts/timezone), which nekto flags. Default: no spoof,
-  // just the token write. Token write matches the proven working browser extension
-  // EXACTLY: nekto hydrates user.authToken from localStorage['storage_audio_v2'] via
-  // vuex-persistedstate. No cookiesAccepted/__ls_chk__ — not real nekto fields.
-  return `${spoofFp ? fingerprintSpoofScript(fp) : ''}
-(() => {
+// Match the token-only extension: update storage before Vuex initializes, and
+// leave the browser's fingerprint, consent and other saved settings intact.
+export function tokenExtensionScript(token, { origins = ['https://nekto-me.kz'] } = {}) {
+  if (typeof token !== 'string' || token.length > 8192) throw new Error('Token must contain at most 8192 characters.');
+  return `(() => {
+  if (!${JSON.stringify(origins)}.includes(location.origin)) return;
   const TOKEN = ${JSON.stringify(token)};
-  const KEY   = "storage_audio_v2";
-
+  const KEY = "storage_audio_v2";
   const write = () => {
     try {
       const saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {};
@@ -137,15 +19,14 @@ export function tokenExtensionScript(token, spoofFp = false) {
       return true;
     } catch { return false; }
   };
-
-  if (!write()) {
-    document.addEventListener("readystatechange", write, { once: true });
-  }
+  if (!write()) document.addEventListener("readystatechange", write, { once: true });
 })();`;
 }
 
-export async function writeTokenExtension(directory, token, { matches = ['https://nekto-me.kz/*'] } = {}) {
-  if (typeof token !== 'string' || token.length > 8192) throw new Error('Token must contain at most 8192 characters.');
+export async function writeTokenExtension(directory, token, {
+  matches = ['https://nekto-me.kz/*'], origins = ['https://nekto-me.kz'],
+} = {}) {
+  const code = tokenExtensionScript(token, { origins });
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const manifest = {
     manifest_version: 3, name: 'nekto prime', version: '1.0',
@@ -153,31 +34,20 @@ export async function writeTokenExtension(directory, token, { matches = ['https:
     host_permissions: matches,
   };
   await writeFile(join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 });
-  await writeFile(join(directory, 'prime.js'), tokenExtensionScript(token), { mode: 0o600 });
+  await writeFile(join(directory, 'prime.js'), code, { mode: 0o600 });
   return directory;
 }
 
-/**
- * Launch options for a bare chromium.launch() call (no persistent profile, no extension).
- * Token injection + fingerprint spoof are handled via addInitScript on each fresh context.
- * User-agent is set per-context via browser.newContext({ userAgent }) so different tokens
- * can use different UAs without relaunching the browser.
- */
-export function browserLaunchOptions(silentMicrophonePath) {
-  // On a local Windows machine, the user's REAL Chrome + token already matches
-  // partners. The bot failing to match while headless bundled Chromium is the only
-  // remaining difference points at the browser itself (headless detection, software
-  // WebGL/SwiftShader, Chromium-vs-Chrome). So default to the user's installed
-  // Google Chrome (channel: 'chrome') running HEADFUL — nearly identical to the
-  // environment that is known to work. Both are overridable by env for server use:
-  //   NEKTO_BROWSER_CHANNEL (default 'chrome'; set 'chromium' to force bundled)
-  //   NEKTO_HEADLESS=1       (default headful; set 1 for a headless server)
-  const channel = process.env.NEKTO_BROWSER_CHANNEL || 'chrome';
-  const headless = process.env.NEKTO_HEADLESS === '1';
+export function browserLaunchOptions(silentMicrophonePath, { env = process.env, platform = process.platform } = {}) {
+  const server = !!env.RAILWAY_PROJECT_ID ||
+    (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY);
+  const headless = env.NEKTO_HEADLESS === '1' || (env.NEKTO_HEADLESS !== '0' && server);
   return {
-    channel, headless, ignoreDefaultArgs: ['--mute-audio'],
+    channel: env.NEKTO_BROWSER_CHANNEL || (server ? 'chromium' : 'chrome'),
+    headless, ignoreDefaultArgs: ['--mute-audio'],
     args: [
-      '--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
+      ...(platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
+      '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
       '--disable-blink-features=AutomationControlled',
@@ -186,18 +56,12 @@ export function browserLaunchOptions(silentMicrophonePath) {
   };
 }
 
-/** @deprecated Use browserLaunchOptions() + browser.newContext() instead of persistent profile. */
-export function extensionBrowserOptions(extensionPath, silentMicrophonePath, userAgent) {
+// Used by the local extension integration fixture.
+export function extensionBrowserOptions(extensionPath, silentMicrophonePath) {
+  const options = browserLaunchOptions(silentMicrophonePath);
   return {
-    channel: 'chromium', headless: true, ignoreDefaultArgs: ['--mute-audio'],
-    args: [
-      '--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
-      '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
-      '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
-      '--disable-blink-features=AutomationControlled',
-      ...(silentMicrophonePath ? [`--use-file-for-fake-audio-capture=${silentMicrophonePath}`] : []),
-      ...(userAgent ? [`--user-agent=${userAgent}`] : []),
-      `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`,
-    ],
+    ...options, channel: 'chromium', headless: true, ignoreDefaultArgs: ['--mute-audio', '--disable-extensions'],
+    args: [...options.args,
+      `--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
   };
 }
