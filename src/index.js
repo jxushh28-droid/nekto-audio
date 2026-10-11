@@ -1,6 +1,6 @@
 import http from 'node:http';
 import {
-  ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits, SlashCommandBuilder,
+  ChannelType, Client, Events, GatewayIntentBits, MessageFlags, PermissionFlagsBits,
 } from 'discord.js';
 import {
   AudioPlayerStatus, createAudioPlayer, createAudioResource, entersState, joinVoiceChannel,
@@ -10,9 +10,12 @@ import { NektoBrowser } from './nekto.js';
 import { PcmQueue, RelayOpusStream } from './pcm.js';
 import { TokenStore } from './token-store.js';
 import { statusReply } from './status-reply.js';
+import { commands } from './commands.js';
+import { RelaySettings, changeAutoNext } from './relay-settings.js';
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 const store = new TokenStore(process.env.DATA_DIR || './data', process.env.NEKTO_AUTH_TOKEN || '');
+const settings = new RelaySettings(process.env.DATA_DIR || './data');
 let ready = false;
 let busy = false;
 let closing = false;
@@ -28,17 +31,6 @@ const startupCategory = error => {
   return 'unclassified';
 };
 const safeError = error => String(error?.code || error?.name || 'Error').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
-
-const commands = [
-  new SlashCommandBuilder().setName('token').setDescription('Save your Nekto auth token privately')
-    .addStringOption(option => option.setName('token').setDescription('Your Nekto auth token')
-      .setRequired(true).setMinLength(1).setMaxLength(4000)),
-  new SlashCommandBuilder().setName('join').setDescription('Join your voice channel and search on Nekto'),
-  new SlashCommandBuilder().setName('next').setDescription('End this Nekto call and search for another person'),
-  new SlashCommandBuilder().setName('stop').setDescription('Stop Nekto while staying in Discord voice'),
-  new SlashCommandBuilder().setName('leave').setDescription('Stop Nekto and leave Discord voice'),
-  new SlashCommandBuilder().setName('status').setDescription('Show private relay connection status'),
-].map(command => command.setDMPermission(false).toJSON());
 
 async function leave() {
   const previous = session;
@@ -132,10 +124,12 @@ client.on(Events.InteractionCreate, async interaction => {
         break;
       }
       case 'join': message = await join(interaction); break;
+      case 'autonext': message = await changeAutoNext(browser, settings, interaction.options.getBoolean('enabled')); break;
       case 'next': {
         if (!session || session.guildId !== interaction.guildId) throw new Error('Use /join first.');
         const member = await interaction.guild.members.fetch(interaction.user.id);
         if (member.voice.channelId !== session.channelId) throw new Error('Join my voice channel first.');
+        console.log(JSON.stringify({ event: 'nekto_next_requested', source: 'discord-command' }));
         queue.clear(); message = await browser.next(store.value); break;
       }
       case 'stop': await browser.stop(); queue.clear(); message = 'Nekto stopped.'; break;
@@ -238,6 +232,7 @@ function render(d){
     card('Status',[
       row('Discord voice',voice,voiceCls),
       row('Nekto',nekto,nektoCls),
+      row('Automatic next',d.autoNext?badge('ON','ok'):badge('OFF','dim')),
       row('Authorization',auth,auth.includes('confirm')?'ok':'warn'),
       row('Captcha',captcha?badge('REQUIRED','bad'):badge('clear','ok')),
       row('Restricted',restricted?badge('YES','bad'):badge('no','ok')),
@@ -291,6 +286,7 @@ const server = http.createServer(async (request, response) => {
       response.end(JSON.stringify({
         voice: session?.connection.state.status || 'disconnected',
         nekto: status.active ? (status.callState?.phase || 'open') : 'stopped',
+        autoNext: status.autoNext,
         authorization: status.authorization || 'unconfirmed',
         captcha: !!(d.captcha || d.hcaptcha),
         restricted: !!d.restricted,
@@ -347,6 +343,8 @@ try {
   if (!process.env.DISCORD_TOKEN) throw new Error('DISCORD_TOKEN is required.');
   startupStage = 'token-store';
   await store.load();
+  startupStage = 'relay-settings';
+  browser.setAutoNext(await settings.load());
   startupStage = 'browser';
   await browser.launch(store.value); // Verify Chromium with the extension before reporting healthy.
   client.once(Events.ClientReady, async () => {

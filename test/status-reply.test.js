@@ -13,6 +13,13 @@ test('private status shows the complete saved token and accurate partner state',
   assert.deepEqual(reply.allowedMentions, { parse: [] });
 });
 
+test('private status shows auto-next and synthetic microphone verification', () => {
+  const status = { ...args.status, autoNext: false, microphone: { permission: 'granted', inputs: 3, syntheticInputsOnly: true } };
+  const reply = statusReply({ ...args, status });
+  assert(reply.content.includes('Automatic next: OFF'));
+  assert(reply.content.includes('synthetic only=true'));
+});
+
 test('long tokens are preserved in an attachment within Discord message limits', () => {
   const token = 'complete-token-'.repeat(300);
   const reply = statusReply({ ...args, token });

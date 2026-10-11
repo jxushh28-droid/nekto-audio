@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { silentMicrophoneWav, writeSilentMicrophone } from '../src/silent-microphone.js';
 import { extensionBrowserOptions } from '../src/token-extension.js';
+import { browserLaunchOptions } from '../src/token-extension.js';
+import { inspectBrowserMicrophone } from '../src/browser-init.js';
+import vm from 'node:vm';
 
 test('silent microphone WAV has valid mono 48kHz PCM headers and no audio samples', () => {
   const wav = silentMicrophoneWav();
@@ -21,6 +24,27 @@ test('silent microphone WAV has valid mono 48kHz PCM headers and no audio sample
   assert.equal(wav.toString('ascii', 36, 40), 'data');
   assert.equal(wav.readUInt32LE(40), 96000);
   assert(wav.subarray(44).every(value => value === 0));
+});
+
+test('missing silent-file configuration cannot fall back to a default microphone source', () => {
+  for (const path of [null, undefined, '']) assert.throws(() => browserLaunchOptions(path), /silent microphone file is required/);
+});
+
+test('microphone inspection accepts only synthetic inputs and returns no device identifiers', async () => {
+  for (const [labels, expected] of [
+    [['Fake Default Audio Input', 'Fake Audio Input 1', 'Fake Audio Input 2'], true],
+    [['Fake Audio Input 1', 'Laptop Microphone'], false],
+    [[''], false], [[], false],
+  ]) {
+    const report = await vm.runInNewContext(`(${inspectBrowserMicrophone.toString()})()`, { navigator: {
+      permissions: { query: async () => ({ state: 'granted' }) },
+      mediaDevices: { getUserMedia() {}, enumerateDevices: async () => labels.map(label => ({ kind: 'audioinput', label, deviceId: 'private-id' })) },
+    } });
+    assert.equal(report.syntheticInputsOnly, expected);
+    assert.equal(report.inputs, labels.length);
+    assert(!JSON.stringify(report).includes('private-id'));
+    assert(!JSON.stringify(report).includes('Laptop Microphone'));
+  }
 });
 
 test('native microphone uses a private silent WAV outside extension contents', async () => {

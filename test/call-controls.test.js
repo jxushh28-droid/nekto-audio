@@ -4,7 +4,7 @@ import { advanceAudioCall } from '../src/call-controls.js';
 
 const ready = { searching: false, partnerConnected: false, attention: false, verification: false, restricted: false };
 function fixture(initial, { confirmation = false, unrelatedPrompt = false, missingEnd = false, failedEnd = false,
-  fadeReads = 0, challengedAfterConfirm = false, initialPrompt = null, fieldCount = 0 } = {}) {
+  fadeReads = 0, challengedAfterConfirm = false, initialPrompt = null, fieldCount = 0, newPartnerOnStartAuthorization = false } = {}) {
   let state = { ...ready, ...initial }, authorized = 0, ended = 0, started = 0, confirmations = 0;
   if (initialPrompt) state.attention = true;
   const empty = () => ({ count: async () => 0, nth: () => null, or(other) { return other; }, filter() { return this; } });
@@ -38,7 +38,9 @@ function fixture(initial, { confirmation = false, unrelatedPrompt = false, missi
       count: async () => state.attention ? 1 : 0, nth: () => popup,
     } : selector === '.btn' ? empty() : buttons(true, async () => { started++; state.searching = true; }),
   };
-  return { page, options: { authorize: async () => { authorized++; }, timeout: 5, interval: 1 },
+  return { page, options: { authorize: async () => { authorized++;
+    if (newPartnerOnStartAuthorization && authorized === 2) state.partnerConnected = true;
+  }, timeout: 5, interval: 1 },
     counts: () => ({ authorized, ended, started, confirmations }) };
 }
 
@@ -46,6 +48,13 @@ test('next keeps an active search running without extra clicks', async () => {
   const f = fixture({ searching: true });
   assert.equal((await advanceAudioCall(f.page, f.options)).searching, true);
   assert.deepEqual(f.counts(), { authorized: 1, ended: 0, started: 0, confirmations: 0 });
+});
+
+test('automatic resume preserves a partner who connects during the final authorization check', async () => {
+  const f = fixture({}, { newPartnerOnStartAuthorization: true });
+  const state = await advanceAudioCall(f.page, { ...f.options, endCurrentCall: false });
+  assert.equal(state.partnerConnected, true);
+  assert.deepEqual(f.counts(), { authorized: 2, ended: 0, started: 0, confirmations: 0 });
 });
 
 test('repeated join preserves an active partner without End or Start', async () => {

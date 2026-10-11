@@ -170,9 +170,10 @@ try {
     return { peak, live };
   });
   assert.equal(silentInput.live, true);
-  assert(silentInput.peak < 0.0001, 'Native microphone contains sound');
+  assert.equal(silentInput.peak, 0, 'Native microphone contains sound');
   const microphone = await page.evaluate(inspectBrowserMicrophone);
   assert.equal(microphone.permission, 'granted');
+  assert.equal(microphone.syntheticInputsOnly, true, 'Browser exposes a physical microphone');
   assert(microphone.inputs > 0); assert.equal(microphone.legacyApi, true);
   const microphonePaths = await page.evaluate(async () => {
     let expectedLabel;
@@ -336,9 +337,11 @@ try {
       setTimeout(() => { modal.remove(); start.hidden = false; }, 100); };
     modal.append(confirm); document.body.append(modal, start);
   });
-  await page.waitForFunction(() => window.nativeAutoStarts === 2);
-  await relaySession.callAdvancePromise;
-  assert.equal(await page.evaluate(() => window.nativeAutoConfirms), 1, 'Monitor did not confirm the native End prompt exactly once');
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.deepEqual(await page.evaluate(() => [window.nativeAutoConfirms, window.nativeAutoStarts,
+    document.body.__vue__.$store.state.chat.activeConnectionId]), [0, 1, 7], 'Monitor ended an active call');
+  await relaySession.next('local-test-token');
+  assert.deepEqual(await page.evaluate(() => [window.nativeAutoConfirms, window.nativeAutoStarts]), [1, 2], 'Explicit Next did not confirm End and search');
   assert.equal(relaySession.forwarding, true);
   relaySession.stopSessionMonitor();
   // Reproduce the uploaded screenshot: /peer is ended, its green Search button
@@ -358,10 +361,16 @@ try {
       setTimeout(() => { finished.remove(); start.remove(); location.hash = '/searching'; window.newSearchUiReady = true; }, 200); };
     document.body.append(finished, start);
   });
+  relaySession.setAutoNext(false); relaySession.searchIntent = true;
+  relaySession.startSessionMonitor(page, 'local-test-token');
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(await page.evaluate(() => window.screenshotStarts), 0, 'Automatic next OFF clicked Search');
+  relaySession.stopSessionMonitor();
   assert.match(await relaySession.next('local-test-token'), /^Searching on Nekto/);
   assert.deepEqual(await page.evaluate(() => [window.screenshotStarts, window.newSearchUiReady,
     document.body.__vue__.$store.state.user.isSearching]), [1, true, true]);
   relaySession.stopSessionMonitor();
+  relaySession.setAutoNext(true);
   await page.evaluate(() => { location.hash = '/'; });
   // /next can arrive after the other participant leaves or with a native End
   // confirmation already open. Both cases should acknowledge once and Start.

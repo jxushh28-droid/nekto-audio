@@ -181,10 +181,14 @@ export function installBrowserRelay({ origin }) {
 
 // Runs on the loaded origin; return capability/permission checks, no device IDs.
 export async function inspectBrowserMicrophone() {
-  let permission = 'unavailable', inputs = 0;
+  let permission = 'unavailable', inputs = 0, syntheticInputsOnly = false;
   try { permission = (await navigator.permissions.query({ name: 'microphone' })).state; } catch {}
-  try { inputs = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput').length; } catch {}
-  return { permission, inputs, modernApi: typeof navigator.mediaDevices?.getUserMedia === 'function',
+  try {
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput');
+    inputs = devices.length;
+    syntheticInputsOnly = inputs > 0 && devices.every(device => /^Fake (?:Default )?Audio Input(?: \d+)?$/.test(device.label));
+  } catch {}
+  return { permission, inputs, syntheticInputsOnly, modernApi: typeof navigator.mediaDevices?.getUserMedia === 'function',
     legacyApi: typeof navigator.getUserMedia === 'function', webkitApi: typeof navigator.webkitGetUserMedia === 'function' };
 }
 

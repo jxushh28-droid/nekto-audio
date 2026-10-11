@@ -81,6 +81,11 @@ export async function advanceAudioCall(page, { check = () => {}, authorize, endC
   if (!start) return observed;
   await authorize(); check();
   if (!startSearch) return observed;
+  // A new partner may connect while registration/control checks are awaiting.
+  // Preserve that call instead of activating an obsolete Search control.
+  const latest = await page.evaluate(readAudioCallState);
+  check(); assertCallAvailable(latest);
+  if (latest.searching || latest.partnerConnected) return latest;
   await start.click({ timeout: 5000 });
   return waitForAudioSearch(page, { check, timeout, interval });
 }

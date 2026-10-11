@@ -28,6 +28,7 @@ export class NektoBrowser {
     this.protocolDiagnostics = null;
     this.monitorTimer = null; this.monitorVersion = 0;
     this.searchIntent = false;
+    this.autoNext = true;
     this.partnerSeen = false; this.callAdvancePromise = null;
     this.manualSearch = process.env.NEKTO_MANUAL_SEARCH === '1';
     this.waitingForManualSearch = false;
@@ -41,6 +42,10 @@ export class NektoBrowser {
     this.monitorVersion++;
     clearTimeout(this.monitorTimer);
     this.monitorTimer = null;
+  }
+  setAutoNext(enabled) {
+    if (typeof enabled !== 'boolean') throw new TypeError('Auto-next must be enabled or disabled.');
+    this.autoNext = enabled;
   }
   startSessionMonitor(page, token, generation = this.generation) {
     this.stopSessionMonitor();
@@ -68,12 +73,17 @@ export class NektoBrowser {
         else if (observed.callState.searching && !observed.callState.attention) this.partnerSeen = false;
         const prompt = observed.callState.attention ? await page.evaluate(readAudioPrompt) : null;
         check();
-        const callPrompt = ['end-confirm', 'call-ended'].includes(prompt?.category) && !prompt.fieldCount;
-        const ended = observed.callState.callEnded || (this.partnerSeen && !observed.callState.attention);
-        if (this.searchIntent && !observed.callState.verification && !observed.callState.restricted &&
+        const callPrompt = prompt?.category === 'call-ended' && !prompt.fieldCount;
+        const ended = observed.callState.callEnded;
+        if (this.autoNext && this.searchIntent && !observed.callState.verification && !observed.callState.restricted &&
             !observed.callState.searching && !observed.callState.partnerConnected && (callPrompt || ended)) {
           this.forwarding = false;
-          const advance = this.advanceSearch(page, token, check);
+          const automaticCheck = () => {
+            check();
+            if (!this.autoNext) throw new Error('Automatic next was disabled.');
+          };
+          console.log(JSON.stringify({ event: 'nekto_auto_next', reason: callPrompt ? 'call-ended-notice' : 'finished-call-screen', action: 'search-only' }));
+          const advance = this.advanceSearch(page, token, automaticCheck, { endCurrentCall: false });
           this.callAdvancePromise = advance;
           try { await advance; }
           catch { if (current()) this.searchIntent = false; } // Fail in place, without repeated prompt clicks.
@@ -247,7 +257,7 @@ export class NektoBrowser {
     }, 'storage_audio_v2');
     check(); console.log(JSON.stringify({ event: 'nekto_injection_check', ...injection }));
     this.microphone = await page.evaluate(inspectBrowserMicrophone); check();
-    if (this.microphone.permission !== 'granted' || !this.microphone.inputs) throw searchError('microphone');
+    if (this.microphone.permission !== 'granted' || !this.microphone.inputs || !this.microphone.syntheticInputsOnly) throw searchError('microphone');
     setStage('authorize');
     try { await page.waitForFunction(audioClientReady, null, { timeout: 20000 }); }
     catch {
@@ -269,7 +279,7 @@ export class NektoBrowser {
     if (initial.attention || initial.verification || initial.restricted) return this.finishSearch(page, token, check, 'before-start');
     if (!this.manualSearch && !initial.searching && !initial.partnerConnected) {
       setStage('start-delay');
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1000));
       check();
     }
     setStage('control');
@@ -385,7 +395,7 @@ export class NektoBrowser {
   }
   async status(token) {
     const page = this.page;
-    if (!page || page.isClosed()) return { active: false, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    if (!page || page.isClosed()) return { active: false, autoNext: this.autoNext, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
     this.callState = await page.evaluate(readAudioCallState);
     if (token) {
       const identity = await page.evaluate(confirmAudioToken, { token, timeout: 1 });
@@ -398,7 +408,7 @@ export class NektoBrowser {
       iceStates: status.iceStates || [], trackEvents: status.trackEvents || 0, capturedTracks: status.tracks || 0,
       inboundPackets: status.inboundPackets || 0, inboundBytes: status.inboundBytes || 0,
       audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
-    return { ...status, manualSearch: this.manualSearch, waitingForManualSearch: this.waitingForManualSearch,
+    return { ...status, autoNext: this.autoNext, manualSearch: this.manualSearch, waitingForManualSearch: this.waitingForManualSearch,
       protocolDiagnostics: this.protocolDiagnostics, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async screenshot() {

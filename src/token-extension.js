@@ -39,6 +39,7 @@ export async function writeTokenExtension(directory, token, {
 }
 
 export function browserLaunchOptions(silentMicrophonePath, { env = process.env, platform = process.platform } = {}) {
+  if (typeof silentMicrophonePath !== 'string' || !silentMicrophonePath) throw new Error('A silent microphone file is required.');
   const server = !!env.RAILWAY_PROJECT_ID ||
     (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY);
   const headless = env.NEKTO_HEADLESS === '1' || (env.NEKTO_HEADLESS !== '0' && server);
@@ -50,7 +51,7 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
       '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
-      ...(silentMicrophonePath ? [`--use-file-for-fake-audio-capture=${silentMicrophonePath}`] : []),
+      `--use-file-for-fake-audio-capture=${silentMicrophonePath}`,
     ],
   };
 }

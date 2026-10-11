@@ -58,7 +58,7 @@ test('Windows uses visible installed Chrome; Railway and displayless Linux use b
     const server = browserLaunchOptions('fixture.wav', { env, platform: 'linux' });
     assert.equal(server.channel, 'chromium'); assert.equal(server.headless, true);
   }
-  const explicit = browserLaunchOptions(null, { env: { NEKTO_HEADLESS: '0', NEKTO_BROWSER_CHANNEL: 'chrome' }, platform: 'linux' });
+  const explicit = browserLaunchOptions('fixture.wav', { env: { NEKTO_HEADLESS: '0', NEKTO_BROWSER_CHANNEL: 'chrome' }, platform: 'linux' });
   assert.equal(explicit.channel, 'chrome'); assert.equal(explicit.headless, false);
 });
 

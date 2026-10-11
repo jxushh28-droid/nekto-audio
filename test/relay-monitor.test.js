@@ -135,8 +135,9 @@ test('monitor continues after a partner leaves and respects a subsequent manual 
     evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
       fn.name === 'confirmAudioToken' ? { reason: 'native-session-confirmed', diagnostics: identity() } : null };
   browser.page = page; browser.searchIntent = true;
-  browser.advanceSearch = async (actual, token, check) => {
+  browser.advanceSearch = async (actual, token, check, options) => {
     check(); assert.equal(actual, page);
+    assert.equal(options.endCurrentCall, false);
     advances++;
     state = { ...state, searching: true, partnerConnected: false, callEnded: false };
     browser.partnerSeen = false;
@@ -144,7 +145,7 @@ test('monitor continues after a partner leaves and respects a subsequent manual 
   try {
     browser.startSessionMonitor(page, 'fixture-token');
     await until(() => browser.partnerSeen);
-    state.partnerConnected = false;
+    state.partnerConnected = false; state.callEnded = true;
     await until(() => advances === 1);
     await until(() => browser.forwarding);
     state.searching = false;
@@ -205,7 +206,69 @@ test('monitor handles a native call prompt or finished screen once, leaving unre
       await until(() => browser.callState);
       // A second tick must not click again after an unsuccessful call action.
       await new Promise(resolve => setTimeout(resolve, 550));
-      assert.equal(advances, ['end-confirm', 'call-ended', 'finished-screen'].includes(kind) ? 1 : 0, kind);
+      assert.equal(advances, ['call-ended', 'finished-screen'].includes(kind) ? 1 : 0, kind);
     } finally { await browser.stop(); }
   }
+});
+
+test('automatic next OFF leaves an ended call in place', async () => {
+  const browser = new NektoBrowser(() => {});
+  const state = { ...connected(), partnerConnected: false, callEnded: true };
+  const page = { isClosed: () => false,
+    evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
+      fn.name === 'confirmAudioToken' ? { reason: 'native-session-confirmed', diagnostics: identity() } : null };
+  let advances = 0;
+  browser.page = page; browser.searchIntent = true; browser.setAutoNext(false);
+  browser.advanceSearch = async () => { advances++; };
+  try {
+    browser.startSessionMonitor(page, 'fixture-token');
+    await until(() => browser.callState?.callEnded);
+    await new Promise(resolve => setTimeout(resolve, 550));
+    assert.equal(advances, 0);
+    assert.equal(browser.forwarding, false);
+    await browser.stop();
+    assert.equal((await browser.status('fixture-token')).autoNext, false);
+  } finally { await browser.stop(); }
+});
+
+test('transient connection state cannot automatically end a partner call', async () => {
+  const browser = new NektoBrowser(() => {});
+  let state = connected(), advances = 0;
+  const page = { isClosed: () => false,
+    evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
+      fn.name === 'confirmAudioToken' ? { reason: 'native-session-confirmed', diagnostics: identity() } : null };
+  browser.page = page; browser.searchIntent = true;
+  browser.advanceSearch = async () => { advances++; };
+  try {
+    browser.startSessionMonitor(page, 'fixture-token');
+    await until(() => browser.partnerSeen);
+    state = { ...state, partnerConnected: false, callEnded: false };
+    await until(() => browser.callState.partnerConnected === false);
+    state.partnerConnected = true;
+    await until(() => browser.callState.partnerConnected);
+    assert.equal(advances, 0);
+  } finally { await browser.stop(); }
+});
+
+test('turning automatic next OFF cancels a pending automatic click', async () => {
+  const browser = new NektoBrowser(() => {});
+  const state = { ...connected(), partnerConnected: false, callEnded: true };
+  const page = { isClosed: () => false,
+    evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
+      fn.name === 'confirmAudioToken' ? { reason: 'native-session-confirmed', diagnostics: identity() } : null };
+  let release, entered = false, starts = 0;
+  const paused = new Promise(resolve => { release = resolve; });
+  browser.page = page; browser.searchIntent = true;
+  browser.advanceSearch = async (actual, token, check, options) => {
+    assert.equal(options.endCurrentCall, false);
+    entered = true; await paused; check(); starts++;
+  };
+  try {
+    browser.startSessionMonitor(page, 'fixture-token');
+    await until(() => entered);
+    browser.setAutoNext(false); release();
+    await until(() => !browser.callAdvancePromise);
+    assert.equal(starts, 0);
+    assert.equal(browser.searchIntent, false);
+  } finally { release(); await browser.stop(); }
 });
