@@ -12,7 +12,7 @@
  *  5. userAgentData   — platform = "Windows" (Client Hints complement)
  *  6. Cookie banner + tab-conflict auto-click
  */
-export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
+export function installAntiDetect({ fptHash, fpSeed, gumHash, spoofFp }) {
 
   // ── 0. navigator.webdriver — the #1 bot detection signal ───────────────────
   // Playwright (like Puppeteer) sets navigator.webdriver = true unless the
@@ -112,6 +112,12 @@ export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
     } catch (_) {}
   }
 
+  // ── Fingerprint spoofs (opt-in) ─────────────────────────────────────────────
+  // Sections 2–5 below alter the machine fingerprint (WebGL GPU, canvas, audio,
+  // WebGPU, Client Hints). On a real local machine these CONTRADICT the true
+  // hardware/OS and make the session look spoofed → phantom ban. They are only
+  // useful on a headless Linux server to hide the VM. Skip them unless spoofFp.
+  if (spoofFp) {
   // ── 2. WebGL GPU spoof ──────────────────────────────────────────────────────
   const GL_VENDOR          = 0x1F00;
   const GL_RENDERER        = 0x1F01;
@@ -293,6 +299,7 @@ export function installAntiDetect({ fptHash, fpSeed, gumHash }) {
       });
     }
   } catch (_) {}
+  } // end if (spoofFp)
 
   // ── 6. Cookie banner + tab-conflict (ported verbatim from reference inject.ts) ─
   // The reference hides the cookie-consent banner with CSS (it's a notice, not a

@@ -114,15 +114,15 @@ function fingerprintSpoofScript(fp) {
 })();`;
 }
 
-export function tokenExtensionScript(token) {
+export function tokenExtensionScript(token, spoofFp = false) {
   const fp = generateFingerprint(token);
-  // fingerprintSpoofScript runs first (document_start), then the token write.
-  // Token write matches the proven working browser extension EXACTLY: nekto hydrates
-  // user.authToken from localStorage['storage_audio_v2'] via vuex-persistedstate
-  // (persisted paths: user.authToken, user.openChats, user.searchParams, ...). No
-  // cookiesAccepted / __ls_chk__ — those are not real nekto fields; the site works
-  // without any consent flag once a valid token is present.
-  return `${fingerprintSpoofScript(fp)}
+  // fingerprintSpoofScript (navigator/screen/Intl → Windows) runs first ONLY when
+  // spoofFp — otherwise it forces a Windows identity that contradicts the real local
+  // machine (and the real GPU/fonts/timezone), which nekto flags. Default: no spoof,
+  // just the token write. Token write matches the proven working browser extension
+  // EXACTLY: nekto hydrates user.authToken from localStorage['storage_audio_v2'] via
+  // vuex-persistedstate. No cookiesAccepted/__ls_chk__ — not real nekto fields.
+  return `${spoofFp ? fingerprintSpoofScript(fp) : ''}
 (() => {
   const TOKEN = ${JSON.stringify(token)};
   const KEY   = "storage_audio_v2";

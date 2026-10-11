@@ -141,14 +141,22 @@ export class NektoBrowser {
       // addInitScript below instead of a Chrome extension.
       const browser = await this.launch(token);
       check();
+      // Fingerprint spoofing is OPT-IN (NEKTO_SPOOF_FP=1). It was written for a
+      // headless LINUX SERVER, where the real fingerprint screams "Linux/VM". Run
+      // LOCALLY on a real machine, the same spoofing instead fights the machine's
+      // own consistent fingerprint (Windows UA over a real GPU, fake NVIDIA over
+      // real WebGL extensions, perturbed canvas/audio) → a contradictory Frankenstein
+      // fingerprint nekto can phantom-ban. A real browser + token alone matches fine,
+      // so by default we leave the real local fingerprint untouched.
+      const spoofFp = process.env.NEKTO_SPOOF_FP === '1';
       const { userAgent } = generateFingerprint(token);
-      context = await browser.newContext({ userAgent });
+      context = await browser.newContext(spoofFp ? { userAgent } : {});
       await context.grantPermissions(['microphone'], { origin: new URL(NEKTO_URL).origin });
-      // Spoof Origin + Windows Client-Hints headers. context.userAgent does NOT
-      // change Sec-CH-UA* headers, so without this Chromium leaks
-      // Sec-CH-UA-Platform: "Linux" → nekto silently excludes Linux from matching
-      // (phantom ban / infinite search). Force them to match the Windows UA.
-      await context.setExtraHTTPHeaders({ 'origin': 'https://nekto-me.kz', ...windowsClientHints(token) });
+      // Always set Origin. Only force Windows Client-Hints when spoofing (otherwise
+      // the real platform hints are correct and consistent with the real UA).
+      await context.setExtraHTTPHeaders(spoofFp
+        ? { 'origin': 'https://nekto-me.kz', ...windowsClientHints(token) }
+        : { 'origin': 'https://nekto-me.kz' });
       check();
       this.context = context;
       const page = await context.newPage();
@@ -189,19 +197,19 @@ export class NektoBrowser {
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
       });
       await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
-      // Token + fingerprint injection (replaces the Chrome extension approach).
-      // tokenExtensionScript writes authToken to localStorage at document_start and
-      // applies navigator/screen/Intl spoof overrides.
-      await page.addInitScript({ content: tokenExtensionScript(token) });
-      // Anti-detection ported from the proven reference (inject.ts):
-      //   fptHash = md5(token) → swap the FingerprintJS visitorId on every WS frame so
-      //     each token is its own stable device (device bans don't carry across tokens).
-      //   fpSeed  = FNV-1a(token) → LCG seed for canvas pixel noise (stable per token).
-      // gumHash kept for compatibility but no longer used by the simplified hook.
+      // Token injection: always writes authToken to localStorage at document_start.
+      // navigator/screen/Intl spoof only when spoofFp (it forces a Windows identity
+      // that conflicts with the real local machine otherwise).
+      await page.addInitScript({ content: tokenExtensionScript(token, spoofFp) });
+      // Anti-detection. Always-on: navigator.webdriver removal, window.chrome,
+      // navigator.plugins, fpt=md5(token) WS swap, cookie/tab handling — these hide
+      // automation without contradicting a real fingerprint. The fingerprint spoofs
+      // (WebGL/canvas/audio/WebGPU/userAgentData) run only when spoofFp=true.
       await page.addInitScript(installAntiDetect, {
         fptHash: createHash('md5').update(token || '').digest('hex'),
         fpSeed: fpSeed(token || ''),
         gumHash: createHash('sha256').update((token || '') + '-gum').digest('hex'),
+        spoofFp,
       });
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       stage = 'load';
