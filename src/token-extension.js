@@ -101,25 +101,33 @@ export function tokenExtensionScript(token) {
 (() => {
   const TOKEN = ${JSON.stringify(token)};
   const KEY   = "storage_audio_v2";
+  const LSCHK = "__ls_chk__";
 
   const write = () => {
     try {
       const saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {};
+      const chk   = localStorage.getItem(LSCHK) || "";
       // Always check BOTH conditions. If only the token matches but cookiesAccepted
       // is not set, we must still write — otherwise nekto connects WS without the
       // consent flag and the server sends captcha-request before Playwright can click
       // the cookie button.
-      if (saved?.user?.authToken === TOKEN && saved?.settings?.cookiesAccepted === true) return true;
+      const needChk = chk.indexOf(TOKEN) === -1;
+      if (!needChk && saved?.user?.authToken === TOKEN && saved?.settings?.cookiesAccepted === true) return true;
       saved.user = saved.user || {};
       saved.user.authToken = TOKEN;
       // Pre-accept cookies so nekto's Vue app never enters the captcha-triggering
       // state where WS connects before the cookie consent flag is set.
-      // Nekto stores acceptance under settings.cookiesAccepted inside the same key.
-      // Setting it here at document_start guarantees the flag is present before
-      // any page script reads it — even if the token was already correct.
       saved.settings = saved.settings || {};
       saved.settings.cookiesAccepted = true;
       localStorage.setItem(KEY, JSON.stringify(saved));
+      // Pre-populate __ls_chk__ so nekto's K(authToken) function returns 1 (returning
+      // user) instead of 0/-1 (fresh/bot session). The FP component "lst" is derived
+      // from this and is signed into infoDataS. Having lst=1 removes the single
+      // strongest bot signal in the signed fingerprint payload.
+      if (needChk) {
+        const next = chk ? chk + "," + TOKEN : TOKEN;
+        localStorage.setItem(LSCHK, next);
+      }
       return true;
     } catch { return false; }
   };
