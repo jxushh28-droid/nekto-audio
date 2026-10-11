@@ -7,7 +7,7 @@ import {
   NoSubscriberBehavior, StreamType, VoiceConnectionStatus,
 } from '@discordjs/voice';
 import { NektoBrowser } from './nekto.js';
-import { PcmQueue, PcmStream } from './pcm.js';
+import { PcmQueue, RelayOpusStream } from './pcm.js';
 import { TokenStore } from './token-store.js';
 import { statusReply } from './status-reply.js';
 
@@ -72,7 +72,7 @@ async function join(interaction) {
     adapterCreator: interaction.guild.voiceAdapterCreator, selfDeaf: true, selfMute: false,
   });
   const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
-  const stream = new PcmStream(queue);
+  const stream = new RelayOpusStream(queue, { bitrate: channel.bitrate || 64000 });
   session = { guildId: interaction.guild.id, channelId: channel.id, userId: interaction.user.id, connection, player, stream };
   const current = session;
   connection.on('error', error => console.error(`Discord voice connection error (${safeError(error)}).`));
@@ -91,7 +91,7 @@ async function join(interaction) {
     await member.fetch();
     if (member.voice.channelId !== channel.id || session !== current) throw new Error('Join the voice channel again, then use /join.');
     connection.subscribe(player);
-    player.play(createAudioResource(stream, { inputType: StreamType.Raw }));
+    player.play(createAudioResource(stream, { inputType: StreamType.Opus }));
     await entersState(player, AudioPlayerStatus.Playing, 5000);
   } catch (error) {
     await leave();
@@ -143,7 +143,8 @@ client.on(Events.InteractionCreate, async interaction => {
       case 'status': {
         const status = await browser.status(store.value);
         console.log(JSON.stringify({ event: 'discord_audio_status', voice: session?.connection.state.status || 'disconnected',
-          framesReceived: queue.received, nonSilentFrames: queue.nonSilent }));
+          framesReceived: queue.received, nonSilentFrames: queue.nonSilent,
+          bufferedFrames: queue.frames.length, droppedFrames: queue.dropped, bufferUnderruns: queue.underruns }));
         privateStatus = statusReply({ status, voice: session?.connection.state.status || 'disconnected', token: store.value, queue });
         break;
       }

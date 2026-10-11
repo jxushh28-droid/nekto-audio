@@ -4,8 +4,9 @@ import { advanceAudioCall } from '../src/call-controls.js';
 
 const ready = { searching: false, partnerConnected: false, attention: false, verification: false, restricted: false };
 function fixture(initial, { confirmation = false, unrelatedPrompt = false, missingEnd = false, failedEnd = false,
-  fadeReads = 0, challengedAfterConfirm = false } = {}) {
+  fadeReads = 0, challengedAfterConfirm = false, initialPrompt = null, fieldCount = 0 } = {}) {
   let state = { ...ready, ...initial }, authorized = 0, ended = 0, started = 0, confirmations = 0;
+  if (initialPrompt) state.attention = true;
   const empty = () => ({ count: async () => 0, nth: () => null, or(other) { return other; }, filter() { return this; } });
   const buttons = (visible, click) => ({ count: async () => visible ? 1 : 0,
     nth: () => ({ isVisible: async () => visible, isEnabled: async () => true, click }),
@@ -22,7 +23,9 @@ function fixture(initial, { confirmation = false, unrelatedPrompt = false, missi
     locator: () => empty(),
   };
   const page = {
-    evaluate: async () => {
+    evaluate: async fn => {
+      if (fn.name === 'readAudioPrompt') return { visible: state.attention, fieldCount,
+        category: unrelatedPrompt ? 'unknown' : initialPrompt || (confirmation ? 'end-confirm' : 'unknown') };
       if (confirmations && fadeReads > 0 && --fadeReads === 0) state.attention = false;
       return { ...state };
     },
@@ -65,6 +68,28 @@ test('next ends the native call before searching, including ordinary end confirm
     const f = fixture({ partnerConnected: true }, { confirmation });
     assert.equal((await advanceAudioCall(f.page, f.options)).searching, true);
     assert.deepEqual(f.counts(), { authorized: 2, ended: 1, started: 1, confirmations: Number(confirmation) });
+  }
+});
+
+test('next confirms an already open End prompt before starting the new search', async () => {
+  const f = fixture({ partnerConnected: false }, { initialPrompt: 'end-confirm', fadeReads: 4 });
+  assert.equal((await advanceAudioCall(f.page, { ...f.options, timeout: 100 })).searching, true);
+  assert.deepEqual(f.counts(), { authorized: 2, ended: 0, started: 1, confirmations: 1 });
+});
+
+test('next starts again after a partner leaves, with or without a notice', async () => {
+  for (const initialPrompt of [null, 'call-ended']) {
+    const f = fixture({}, { initialPrompt });
+    assert.equal((await advanceAudioCall(f.page, f.options)).searching, true);
+    assert.deepEqual(f.counts(), { authorized: 2, ended: 0, started: 1, confirmations: Number(!!initialPrompt) });
+  }
+});
+
+test('call-related forms and an End prompt during repeated join stay unanswered', async () => {
+  for (const options of [{ fieldCount: 1 }, { endCurrentCall: false }]) {
+    const f = fixture({}, { initialPrompt: 'end-confirm', fieldCount: options.fieldCount || 0 });
+    await assert.rejects(advanceAudioCall(f.page, { ...f.options, ...options }), error => error.code === 'NEKTO_ATTENTION');
+    assert.equal(f.counts().confirmations, 0);
   }
 });
 

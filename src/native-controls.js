@@ -3,7 +3,8 @@
 const flexibleWhitespace = pattern => new RegExp(pattern.source.replace('^', '^\\s*').replaceAll(' ', '\\s+'), pattern.flags);
 export const startName = flexibleWhitespace(/^(?:Начать(?: нов(?:ый|ую|ое))?(?: разговор| беседу| общение| поиск| чат)?|Нов(?:ый (?:разговор|собеседник|чат)|ая беседа)|Искать(?: (?:нового )?собеседника)?|Поиск (?:нового )?собеседника|Следующий собеседник|Start(?: (?:a )?(?:new )?(?:call|conversation|search|chat))?|New (?:conversation|call|chat)|Find (?:a )?(?:new )?partner|Бастау|Іздеу|(?:Әңгіме|Әңгімені|Әңгімелесуді|Сөйлесуді|Сұхбатты|Іздеуді|Чатты)(?: қайта)? бастау|(?:Әңгімелесушіні|Сұхбаттасушыны) іздеу|Жаңа (?:әңгіме|сұхбат|чат))\s*[.!…]?\s*$/iu);
 export const endName = flexibleWhitespace(/^(?:Завершить(?: разговор| беседу| общение)?|Закончить(?: разговор| беседу)|End (?:call|conversation|chat)|Disconnect|(?:Әңгімені|Әңгімелесуді|Сөйлесуді|Сұхбатты|Қоңырауды) аяқтау|Аяқтау)\s*[.!…]?\s*$/iu);
-export const confirmEndName = flexibleWhitespace(/^(?:Да(?:,?\s+завершить)?|Завершить|Yes|End call|Confirm|Иә(?:,?\s+аяқтау)?|Аяқтау|Растау)\s*[.!…]?\s*$/iu);
+export const confirmEndName = flexibleWhitespace(/^(?:Да(?:,?\s+(?:завершить|закончить|прервать)(?: разговор| беседу)?)?|Завершить(?: разговор)?|Yes(?:,?\s+(?:end|disconnect))?|End call|Confirm|О[кk]|Ok(?:ay)?|Иә(?:,?\s+(?:аяқтау|тоқтату))?|Аяқтау|Растау)\s*[.!…]?\s*$/iu);
+export const acknowledgeCallName = flexibleWhitespace(/^(?:О[кk]|Окей|Понятно|Продолжить(?: поиск)?|Хорошо|Ok(?:ay)?|Continue(?: search)?|Түсінікті|Жарайды|Жақсы|Жалғастыру)\s*[.!…]?\s*$/iu);
 
 export async function usableControls(locator) {
   const matches = [];

@@ -18,9 +18,18 @@ export function readAudioPrompt() {
     /captcha|капч|verify.*human|human verification|(?:провер|подтверд).*(человек|робот)|не робот|unusual traffic/i.test(text);
   const restricted = !!system?.forceDisconnectReason || popup.classList.contains('banPopup') ||
     /заблокирован|забанен|banned|blocked|ограничен доступ/i.test(text);
+  const endConfirmation =
+    /(?=.*(?:завершить|закончить|прервать)\s+(?:разговор|беседу|общение))(?=.*(?:уверены|действительно|хотите))/is.test(text) ||
+    /(?=.*(?:are you sure|confirm|do you (?:really )?want))(?=.*(?:end|disconnect|leave))(?=.*(?:call|conversation|chat))/is.test(text) ||
+    /(?=.*(?:әңгім|сөйлесу|сұхбат|қоңырау))(?=.*(?:аяқта|тоқтату))(?=.*(?:сенімді|раста|келе ме))/isu.test(text);
+  const callEnded =
+    /(?:(?:собеседник|собеседница|партн[её]р).*(?:завершил|закончил|прервал|покинул|отключил)|(?:разговор|беседа|общение)\s+(?:заверш[её]н|окончен|закончен|прерван))/is.test(text) ||
+    /(?:(?:partner|stranger).*(?:left|disconnected|ended)|(?:call|conversation|chat)\s+(?:has\s+)?ended)/is.test(text) ||
+    /(?:(?:әңгімелесуші|сұхбаттасушы).*(?:аяқта|кет|тоқтат)|(?:әңгіме|сөйлесу|сұхбат|қоңырау).*(?:аяқталды|тоқтатылды))/isu.test(text);
   const category = verification ? 'verification' : restricted ? 'restriction' :
     /доступ.*микрофон.*(?:запрещ|отказ)|microphone.*(?:denied|not allowed)|microphone permission.*denied/i.test(text) ? 'microphone-denied' :
     /микрофон.*(не найден|не обнаруж|недоступ|отсутств)|microphone.*(not found|unavailable|missing)|no microphone/i.test(text) ? 'microphone-error' :
+    endConfirmation ? 'end-confirm' : callEnded ? 'call-ended' :
     /возраст|\bage\b/i.test(text) ? 'age' : /ваш пол|выберите пол|\bgender\b/i.test(text) ? 'gender' :
     /разреш(ите|ить).*микрофон|доступ.*микрофон|allow.*microphone|enable.*microphone/i.test(text) ? 'microphone-confirm' :
     /начать (разговор|поиск)|start (conversation|search)|начать общение/i.test(text) ? 'call-confirm' : 'unknown';

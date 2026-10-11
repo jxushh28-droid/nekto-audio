@@ -16,7 +16,7 @@ This is an **incoming-only** relay. Nekto receives a silent microphone; your Dis
 | --- | --- |
 | `/token token:<value>` | Save or replace your Nekto auth token; restart search if you are in the bot's voice channel. |
 | `/join` | Join your current regular voice channel and search on Nekto. Repeating it keeps an active partner or search. |
-| `/next` | End the Nekto call through its normal controls and search again in the same browser session. An active search is left running. |
+| `/next` | Confirm the ordinary End prompt, acknowledge a partner-left notice, and search again in the same session. An active search is left running. |
 | `/stop` | Close Nekto while remaining in Discord voice. |
 | `/leave` | Close Nekto and leave Discord voice. |
 | `/status` | Show your full saved Nekto token, partner/search state, WebRTC diagnostics, and the last failure privately. |
@@ -27,7 +27,11 @@ Token acceptance is preserved in status even after a failed browser closes. Nati
 
 Start lookup ignores hidden copies of controls and requires a single visible, enabled match. It supports native buttons, links and `.btn` controls with explicit call/search labels in Kazakh, Russian and English. The bot leaves cookie-consent controls alone and proceeds directly to Start. Unavailable or ambiguous Start controls and failed clicks have separate codes. Failed Start attempts and website challenges keep the current page, so `/join` can resume without creating another registration. Failure logs include visible control labels with token values redacted; `/status` logs packet, track, browser-frame and Discord-frame counts without the token. These distinguish a missing control from absent WebRTC audio or a relay delivery problem.
 
-The relay observes native session state every 500 ms. If verification clears while the existing search or call continues, audio forwarding resumes automatically after token and registration checks pass. New verification, restrictions, disconnection, token mismatch, or capture errors pause forwarding. `/stop`, `/leave`, and token replacement cancel monitoring of the old page. The monitor observes state only; it does not answer CAPTCHAs or restart blocked searches. Persistent verification still prevents a Railway-hosted call, and this bot does not currently offer remote browser access to complete it manually.
+The relay observes native session state every 500 ms. A detected search CAPTCHA allows one return to `https://nekto-me.kz/audiochat#/` in the same page/context, followed by fresh native registration checks and one Start action. Verification that persists after this retry remains visible and pauses forwarding; the bot does not answer CAPTCHAs, change verification flags or repeatedly reload. An explicit `/join` or `/next` begins a new attempt. Restrictions, disconnection, token mismatch, or capture errors pause forwarding. If verification clears while the existing search/call continues, forwarding resumes after token checks pass. Manual Stop is respected, and `/stop`, `/leave`, and token replacement cancel monitoring of the old page.
+
+`/next` handles ordinary End confirmations already open when the command arrives, including their closing animation, and acknowledges a notice that the other participant ended the call. If the participant left without a notice, it uses the visible Start action directly. Unknown prompts, forms, restrictions and verification controls are not answered automatically.
+
+Incoming audio crosses the browser bridge in 40 ms batches, then an 80 ms jitter buffer absorbs uneven delivery. Excess backlog trims only the oldest frames instead of emptying the queue. Discord's playback reads pace complete 20 ms Opus packets, eliminating the separate PCM timer and transform backlog. The encoder uses the voice channel bitrate up to 96 kbps and enables Opus packet-loss protection. The relay's native playout sink is inaudible on the bot PC, avoiding an extra local copy. `/status` reports buffer underruns, trims and browser transport drops for diagnosing remaining glitches.
 
 ## Discord setup
 

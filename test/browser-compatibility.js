@@ -18,11 +18,17 @@ try {
     channel: 'chromium', headless: true, executablePath: process.env.CHROMIUM_EXECUTABLE_PATH });
   const newContext = browser.newContext.bind(browser);
   const requests = [];
+  let challengesRemaining = 0, nektoLoads = 0, contextsCreated = 0;
   browser.newContext = async (...args) => {
+    contextsCreated++;
     const context = await newContext(...args);
     await context.route('**/*', async route => {
       const request = route.request();
       requests.push({ host: new URL(request.url()).hostname, headers: request.headers() });
+      const nekto = new URL(request.url()).hostname === new URL(NEKTO_URL).hostname;
+      const challenge = nekto && challengesRemaining > 0;
+      if (nekto) nektoLoads++;
+      if (challenge) challengesRemaining--;
       await route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html>
         <div id="app"><button id="searchCompanyBtn">Начать разговор</button>
         <button id="manual-stop">Остановить поиск</button></div>
@@ -33,7 +39,10 @@ try {
             subscribe() { return () => {}; } };
           document.querySelector('#app').__vue__ = { $store: store };
           window.nativeStarts = 0;
-          document.querySelector('#searchCompanyBtn').onclick = () => { window.nativeStarts++; store.state.user.isSearching = true; };
+          document.querySelector('#searchCompanyBtn').onclick = () => {
+            window.nativeStarts++; store.state.user.isSearching = true;
+            if (${challenge}) store.state.system.captchaRequired = true;
+          };
           document.querySelector('#manual-stop').onclick = () => { store.state.user.isSearching = false; };
         </script>` });
     });
@@ -61,7 +70,7 @@ try {
   await baseline.close(); baseline = null;
   relay = new NektoBrowser(() => {}, directory); relay.browser = browser;
   assert.match(await relay.openSession('fixture-native-token'), /^Searching on Nekto/);
-  const page = relay.page;
+  let page = relay.page;
   assert.equal(await page.evaluate(() => window.tokenAtFirstScript), 'fixture-native-token');
   assert.equal((await relay.status('fixture-native-token')).authorizationDiagnostics.liveTokenMatches, true);
   assert.deepEqual(await page.evaluate(identity), expectedIdentity, 'Production setup changed the native browser fingerprint');
@@ -73,10 +82,39 @@ try {
     return new TextDecoder().decode(await crypto.subtle.decrypt(algorithm, key, encrypted)) === body;
   });
   assert.equal(cryptoRoundTrip, true, 'Native fingerprint/registration payload was rewritten');
+  const loadsBeforeLateChallenge = nektoLoads, currentContext = relay.context;
+  await page.evaluate(() => document.querySelector('#app').__vue__.$store.state.system.captchaRequired = true);
+  await page.waitForFunction(() => !document.querySelector('#app').__vue__.$store.state.system.captchaRequired);
+  assert.equal(nektoLoads, loadsBeforeLateChallenge + 1, 'Late challenge did not return to the audio entry page once');
+  assert.equal(relay.context, currentContext, 'Recovery changed browser identity/context');
+  assert.equal(relay.page, page);
+  await page.waitForFunction(() => window.nativeStarts === 1);
+  await relay.entryRetryPromise;
+  assert.equal(relay.forwarding, true, 'Recovered search did not resume forwarding');
   await page.getByRole('button', { name: 'Остановить поиск', exact: true }).click();
   await new Promise(resolve => setTimeout(resolve, 1100));
   assert.equal(await page.evaluate(() => window.nativeStarts), 1, 'Monitor restarted a manually stopped search');
   assert.equal(relay.forwarding, false);
+  relay.stopSessionMonitor();
+  const contextsBeforeRecovery = contextsCreated, loadsBeforeRecovery = nektoLoads;
+  challengesRemaining = 1;
+  assert.match(await relay.openSession('fixture-native-token'), /^Searching on Nekto/);
+  page = relay.page;
+  assert.equal(nektoLoads, loadsBeforeRecovery + 2, 'Immediate challenge did not retry exactly once');
+  assert.equal(contextsCreated, contextsBeforeRecovery + 1, 'Recovery created another context');
+  assert.equal((await relay.status('fixture-native-token')).authorizationDiagnostics.liveTokenMatches, true);
+  const loadsBeforePersistentChallenge = nektoLoads;
+  challengesRemaining = 3;
+  await assert.rejects(relay.openSession('fixture-native-token'), error => error.code === 'NEKTO_VERIFICATION');
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(nektoLoads, loadsBeforePersistentChallenge + 2, 'Persistent verification caused an unbounded reload loop');
+  assert.equal(relay.forwarding, false);
+  assert.equal((await relay.status('fixture-native-token')).authorizationDiagnostics.captcha, true);
+  challengesRemaining = 0;
+  await relay.openSession('fixture-native-token'); page = relay.page;
+  await page.getByRole('button', { name: 'Остановить поиск', exact: true }).click();
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(await page.evaluate(() => window.nativeStarts), 1, 'Stop after recovery restarted search');
   relay.stopSessionMonitor();
   await page.evaluate(() => {
     const frame = document.createElement('iframe'); frame.src = 'https://www.google.com/recaptcha/fixture'; document.body.append(frame);
@@ -92,7 +130,7 @@ try {
     assert.equal(request.headers.origin, undefined, 'Google document request received a forced Nekto Origin');
   }
   assert(requests.some(request => request.host === 'www.google.com'));
-  console.log('Browser compatibility passed: production session, token before Vuex, native fingerprint/crypto payload, untouched Google headers/frames/navigation, manual Stop preserved.');
+  console.log('Browser compatibility passed: production session, native identity/crypto, scoped Google/CAPTCHA setup, one same-page challenge retry, persistent challenge preserved, manual Stop respected.');
 } finally {
   await baseline?.close();
   await relay?.close();

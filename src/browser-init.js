@@ -6,24 +6,25 @@ export function installBrowserRelay({ origin }) {
   const tracks = new Map();
   const peers = new Set();
   const pendingTracks = new Set();
-  window.__nektoRelay = { tracks: 0, trackEvents: 0, frames: 0, error: null, bindingErrors: 0,
+  window.__nektoRelay = { tracks: 0, trackEvents: 0, frames: 0, droppedFrames: 0, error: null, bindingErrors: 0,
     peers: 0, peerStates: [], iceStates: [], inboundPackets: 0, inboundBytes: 0, audioState: audio.state };
   audio.addEventListener('statechange', () => { window.__nektoRelay.audioState = audio.state; });
   let pending = 0;
   const send = (buffer) => {
-    if (!tracks.size || pending >= 3) return;
+    if (!tracks.size) return;
+    if (pending >= 6) { window.__nektoRelay.droppedFrames += buffer.byteLength / 3840; return; }
     const bytes = new Uint8Array(buffer);
     let binary = '';
     for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
     pending++;
     window.pushNektoAudio(btoa(binary))
-      .then(() => { window.__nektoRelay.frames++; })
+      .then(() => { window.__nektoRelay.frames += buffer.byteLength / 3840; })
       .catch(() => { window.__nektoRelay.bindingErrors++; })
       .finally(() => { pending--; });
   };
   const processorCode = `
     class Relay extends AudioWorkletProcessor {
-      constructor() { super(); this.frame = new ArrayBuffer(3840); this.view = new DataView(this.frame); this.offset = 0; }
+      constructor() { super(); this.frame = new ArrayBuffer(7680); this.view = new DataView(this.frame); this.offset = 0; }
       process(inputs) {
         const channels = inputs[0];
         if (!channels?.[0]) return true;
@@ -34,9 +35,9 @@ export function installBrowserRelay({ origin }) {
           this.view.setInt16(this.offset, Math.round(l * (l < 0 ? 32768 : 32767)), true);
           this.view.setInt16(this.offset + 2, Math.round(r * (r < 0 ? 32768 : 32767)), true);
           this.offset += 4;
-          if (this.offset === 3840) {
+          if (this.offset === 7680) {
             this.port.postMessage(this.frame, [this.frame]);
-            this.frame = new ArrayBuffer(3840); this.view = new DataView(this.frame); this.offset = 0;
+            this.frame = new ArrayBuffer(7680); this.view = new DataView(this.frame); this.offset = 0;
           }
         }
         return true;
@@ -70,6 +71,7 @@ export function installBrowserRelay({ origin }) {
       playback = document.createElement('audio');
       playback.srcObject = stream;
       playback.autoplay = true;
+      playback.volume = 0; // Keep native playout active without a second audible copy on the bot PC.
       await playback.play();
       if (track.readyState === 'ended') { playback.pause(); playback.srcObject = null; return; }
       source = audio.createMediaStreamSource(stream);

@@ -33,3 +33,16 @@ test('unrelated popup text is preserved for private diagnostics', () => {
   const prompt = read({ text: 'Укажите ваш возраст.' });
   assert.equal(prompt.category, 'age'); assert.equal(prompt.text, 'Укажите ваш возраст.');
 });
+
+test('ordinary End confirmations and partner-left notices are distinguished', () => {
+  for (const text of ['Вы действительно хотите закончить разговор?', 'Are you sure you want to end this call?',
+    'Do you want to end the conversation?', 'Сіз әңгімені аяқтағыңыз келетініне сенімдісіз бе?',
+    'Сіз сөйлесуді аяқтағыңыз келе ме?']) {
+    assert.equal(read({ text, field: null }).category, 'end-confirm', text);
+  }
+  for (const text of ['Ваш собеседник завершил разговор.', 'Разговор завершён', 'Your partner has disconnected.',
+    'Әңгімелесуші әңгімені аяқтады.']) {
+    assert.equal(read({ text, field: null }).category, 'call-ended', text);
+  }
+  assert.equal(read({ text: 'Ваш собеседник завершил разговор. Verify you are human.', field: null }).category, 'verification');
+});

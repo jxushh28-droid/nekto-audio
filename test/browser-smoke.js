@@ -43,7 +43,11 @@ try {
   const diagnosticReports = [];
   await attachNektoDiagnostics(page, 'local-test-token', { origin, protocol: true, log: report => diagnosticReports.push(report) });
   const frames = [];
-  await page.exposeBinding('pushNektoAudio', (_, base64) => frames.push(Buffer.from(base64, 'base64')));
+  await page.exposeBinding('pushNektoAudio', (_, base64) => {
+    const batch = Buffer.from(base64, 'base64');
+    assert.equal(batch.length, FRAME_BYTES * 2, 'Expected a 40 ms transport batch');
+    for (let offset = 0; offset < batch.length; offset += FRAME_BYTES) frames.push(batch.subarray(offset, offset + FRAME_BYTES));
+  });
   await page.addInitScript({ content: `
     window.mediaAPIsBeforeRelay = {
       modern: navigator.mediaDevices.getUserMedia,
@@ -298,6 +302,43 @@ try {
   await relaySession.next('local-test-token');
   assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds]), [2, 2], 'Existing search was restarted');
   assert.equal(await page.evaluate(() => window.nativeCookies), 0);
+  // /next can arrive after the other participant leaves or with a native End
+  // confirmation already open. Both cases should acknowledge once and Start.
+  await page.evaluate(() => {
+    const store = document.body.__vue__.$store;
+    store.state.user.isSearching = false; store.state.chat.activeConnectionId = null;
+    document.querySelectorAll('button:not(#acceptCookies), a, .btn').forEach(control => control.remove());
+    const start = document.createElement('button'); start.id = 'searchCompanyBtn'; start.textContent = 'Начать разговор'; start.hidden = true;
+    start.onclick = () => { window.nativeStarts++; store.state.user.isSearching = true; start.hidden = true; };
+    window.nativeNoticeConfirms = 0;
+    window.showCallNotice = text => {
+      const modal = document.createElement('div'); modal.className = 'swal2-popup';
+      const title = document.createElement('h2'); title.className = 'swal2-title'; title.textContent = text;
+      const confirm = document.createElement('button'); confirm.className = 'swal2-confirm';
+      confirm.textContent = text.includes('уверены') ? 'Да, завершить' : 'ОК';
+      confirm.onclick = () => {
+        window.nativeNoticeConfirms++; store.state.chat.activeConnectionId = null;
+        setTimeout(() => { modal.remove(); start.hidden = false; }, 100);
+      };
+      modal.append(title, confirm); document.body.append(modal);
+    };
+    document.body.append(start); window.showCallNotice('Ваш собеседник завершил разговор.');
+  });
+  await relaySession.next('local-test-token');
+  assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds, window.nativeNoticeConfirms]), [3, 2, 1]);
+  await page.evaluate(() => {
+    const store = document.body.__vue__.$store;
+    store.state.user.isSearching = false; store.state.chat.activeConnectionId = 9;
+    window.showCallNotice('Вы уверены, что хотите завершить разговор?');
+  });
+  await relaySession.next('local-test-token');
+  assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds, window.nativeNoticeConfirms]), [4, 2, 2]);
+  await page.evaluate(() => {
+    document.body.__vue__.$store.state.user.isSearching = false;
+    document.querySelector('#searchCompanyBtn').hidden = false;
+  });
+  await relaySession.next('local-test-token');
+  assert.deepEqual(await page.evaluate(() => [window.nativeStarts, window.nativeEnds, window.nativeNoticeConfirms]), [5, 2, 2]);
   await page.evaluate(() => { document.body.__vue__.$store.state.system.forceDisconnectReason = 7; });
   await assert.rejects(relaySession.next('local-test-token'), error => error.code === 'NEKTO_RESTRICTED');
   assert.equal(relaySession.page, page); assert.equal(relaySession.forwarding, false);
@@ -322,7 +363,7 @@ try {
   });
   const alternateStart = await waitForStartControl(page);
   await alternateStart.button.click();
-  assert.equal(await page.evaluate(() => window.nativeStarts), 3);
+  assert.equal(await page.evaluate(() => window.nativeStarts), 6);
   await page.evaluate(() => {
     const diagnostic = document.createElement('button'); diagnostic.id = 'fixture-diagnostic';
     diagnostic.textContent = 'local-test-token 00000000-0000-4000-8000-000000000000';
