@@ -117,38 +117,56 @@ export function installBrowserRelay({ origin }) {
     } catch {} finally { sampling = false; }
   }, 1000);
   window.addEventListener('pagehide', () => clearInterval(diagnosticsTimer), { once: true });
-  const Native = window.RTCPeerConnection;
-  const RelayPeer = new Proxy(Native, {
-    construct(Target, args) {
-      const peer = new Target(...args);
+  // IMPORTANT: Do NOT replace window.RTCPeerConnection (constructor). nekto's
+  // fingerprint module builds a "pristine realm" (a clean iframe) and compares
+  // toString(window.RTCPeerConnection) against the iframe's untampered native
+  // constructor. Any Proxy/subclass/wrapper of the global constructor mismatches
+  // → rtc.mismatch=true → bot flagged in the scan-for-peer payload → ban at search.
+  //
+  // Instead we patch two PROTOTYPE methods (setLocalDescription / setRemoteDescription)
+  // which the fingerprint does NOT native-check. Registering on both guarantees the
+  // peer is tracked before any 'track' event fires, for either caller/callee role.
+  const RTC = window.RTCPeerConnection;
+  if (RTC && RTC.prototype) {
+    const seen = new WeakSet();
+    const cleanup = (peer) => {
+      recoverTracks(peer);
+      if (!['closed', 'failed'].includes(peer.connectionState)) return;
+      if (peer.connectionState === 'closed') peers.delete(peer);
+      window.__nektoRelay.peers = peers.size;
+      for (const receiver of peer.getReceivers()) {
+        const captured = tracks.get(receiver.track?.id);
+        if (captured) {
+          captured.source.disconnect(); captured.playback.pause(); captured.playback.srcObject = null;
+          tracks.delete(receiver.track.id);
+        }
+      }
+      window.__nektoRelay.tracks = tracks.size;
+    };
+    const registerPeer = (peer) => {
+      if (!(peer instanceof RTC) || seen.has(peer)) return;
+      seen.add(peer);
       peers.add(peer);
       window.__nektoRelay.peers = peers.size;
       peer.addEventListener('track', ({ track }) => {
         if (track.kind === 'audio') window.__nektoRelay.trackEvents++;
         capture(track).catch(() => { window.__nektoRelay.error = 'Remote audio capture failed.'; });
       });
-      const cleanup = () => {
-        recoverTracks(peer);
-        if (!['closed', 'failed'].includes(peer.connectionState)) return;
-        if (peer.connectionState === 'closed') peers.delete(peer);
-        window.__nektoRelay.peers = peers.size;
-        for (const receiver of peer.getReceivers()) {
-          const captured = tracks.get(receiver.track?.id);
-          if (captured) {
-            captured.source.disconnect(); captured.playback.pause(); captured.playback.srcObject = null;
-            tracks.delete(receiver.track.id);
-          }
-        }
-        window.__nektoRelay.tracks = tracks.size;
+      peer.addEventListener('connectionstatechange', () => cleanup(peer));
+    };
+    // Patch prototype methods in place. These wrappers are plain functions; the
+    // fingerprint only native-checks the constructor, getUserMedia and localStorage.getItem.
+    const patch = (name) => {
+      const orig = RTC.prototype[name];
+      if (typeof orig !== 'function') return;
+      RTC.prototype[name] = function(...args) {
+        try { registerPeer(this); } catch (_) {}
+        return orig.apply(this, args);
       };
-      peer.addEventListener('connectionstatechange', cleanup);
-      const close = peer.close.bind(peer);
-      peer.close = () => { close(); cleanup(); };
-      return peer;
-    },
-  });
-  window.RTCPeerConnection = RelayPeer;
-  if (window.webkitRTCPeerConnection === Native) window.webkitRTCPeerConnection = RelayPeer;
+    };
+    patch('setLocalDescription');
+    patch('setRemoteDescription');
+  }
 }
 
 // Runs on the loaded origin; return capability/permission checks, no device IDs.
