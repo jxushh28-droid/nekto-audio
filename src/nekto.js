@@ -215,7 +215,10 @@ export class NektoBrowser {
   }
   async loadAndSearch(page, token, check, setStage = () => {}) {
     setStage('load'); check();
-    const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    let response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    // The entry URL can be a same-document hash navigation. Reload in that
+    // case so the native client actually initializes again, in the same context.
+    if (!response) { check(); response = await page.reload({ waitUntil: 'domcontentloaded', timeout: 45000 }); }
     check();
     if (response && response.status() >= 400) throw searchError('load');
     const injection = await page.evaluate(key => {

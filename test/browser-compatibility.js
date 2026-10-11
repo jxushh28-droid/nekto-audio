@@ -84,7 +84,10 @@ try {
   assert.equal(cryptoRoundTrip, true, 'Native fingerprint/registration payload was rewritten');
   const loadsBeforeLateChallenge = nektoLoads, currentContext = relay.context;
   await page.evaluate(() => document.querySelector('#app').__vue__.$store.state.system.captchaRequired = true);
-  await page.waitForFunction(() => !document.querySelector('#app').__vue__.$store.state.system.captchaRequired);
+  await page.waitForFunction(() => {
+    const state = document.querySelector('#app')?.__vue__?.$store?.state;
+    return state && !state.system.captchaRequired;
+  });
   assert.equal(nektoLoads, loadsBeforeLateChallenge + 1, 'Late challenge did not return to the audio entry page once');
   assert.equal(relay.context, currentContext, 'Recovery changed browser identity/context');
   assert.equal(relay.page, page);
