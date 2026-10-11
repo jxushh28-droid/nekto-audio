@@ -111,7 +111,18 @@ export class NektoBrowser {
     // there is no localStorage / IndexedDB / cookie accumulation between sessions.
     if (this.browser?.isConnected()) return this.browser;
     await writeSilentMicrophone(this.microphonePath);
-    this.browser = await chromium.launch(browserLaunchOptions(this.microphonePath));
+    const opts = browserLaunchOptions(this.microphonePath);
+    try {
+      this.browser = await chromium.launch(opts);
+    } catch (error) {
+      // Real Chrome (channel: 'chrome') may not be installed; fall back to the
+      // bundled Chromium so the bot still runs.
+      if (opts.channel && opts.channel !== 'chromium') {
+        console.warn(JSON.stringify({ event: 'nekto_chrome_unavailable',
+          channel: opts.channel, fallback: 'chromium', error: String(error?.message || error).slice(0, 200) }));
+        this.browser = await chromium.launch({ ...opts, channel: 'chromium' });
+      } else throw error;
+    }
     return this.browser;
   }
   async search(token) {
@@ -449,6 +460,24 @@ export function reSearchInPage() {
   if (vis(q('.callScreen__cancelCallBtn'))) return 'in-call';
   // Active-search indicators (any one counts).
   if (vis(q('.stop-scan-button')) || vis(q('#stopSearchBtn'))) return 'searching';
+  // Set the broadest criteria before starting so the match pool is maximal: my
+  // sex = any (".any"), partner sex = any, all partner age groups selected. The
+  // reference always applies criteria before searching; a fresh session that
+  // searches with narrow/unset criteria can match nobody → infinite search.
+  try {
+    const sexPanels = Array.from(document.querySelectorAll('.sex-buttons-panel'));
+    for (const panel of sexPanels) {
+      const anyBtn = panel.querySelector('.any');
+      if (anyBtn && !/checked/.test(anyBtn.className)) anyBtn.click();
+    }
+    const agePanels = Array.from(document.querySelectorAll('.s-age'));
+    const peerAgePanel = agePanels[1] || agePanels[0];
+    if (peerAgePanel) {
+      for (const b of Array.from(peerAgePanel.querySelectorAll('button'))) {
+        if (!/checked/.test(b.className)) b.click();
+      }
+    }
+  } catch (_) {}
   // Find a start control and click it.
   const all = Array.from(document.querySelectorAll('button, .btn'));
   const byText = all.find((b) => /начать разговор|начать поиск|найти собеседник|start|find/i.test((b.innerText || '').trim()));

@@ -164,8 +164,18 @@ export async function writeTokenExtension(directory, token, { matches = ['https:
  * can use different UAs without relaunching the browser.
  */
 export function browserLaunchOptions(silentMicrophonePath) {
+  // On a local Windows machine, the user's REAL Chrome + token already matches
+  // partners. The bot failing to match while headless bundled Chromium is the only
+  // remaining difference points at the browser itself (headless detection, software
+  // WebGL/SwiftShader, Chromium-vs-Chrome). So default to the user's installed
+  // Google Chrome (channel: 'chrome') running HEADFUL — nearly identical to the
+  // environment that is known to work. Both are overridable by env for server use:
+  //   NEKTO_BROWSER_CHANNEL (default 'chrome'; set 'chromium' to force bundled)
+  //   NEKTO_HEADLESS=1       (default headful; set 1 for a headless server)
+  const channel = process.env.NEKTO_BROWSER_CHANNEL || 'chrome';
+  const headless = process.env.NEKTO_HEADLESS === '1';
   return {
-    channel: 'chromium', headless: true, ignoreDefaultArgs: ['--mute-audio'],
+    channel, headless, ignoreDefaultArgs: ['--mute-audio'],
     args: [
       '--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
