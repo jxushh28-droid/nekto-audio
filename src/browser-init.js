@@ -157,6 +157,15 @@ export function installBrowserRelay({ origin }) {
     };
     patch('setLocalDescription');
     patch('setRemoteDescription');
+    // Native close() does not guarantee a connectionstatechange event.
+    const origClose = RTC.prototype.close;
+    if (typeof origClose === 'function') {
+      RTC.prototype.close = function(...args) {
+        const result = origClose.apply(this, args);
+        if (seen.has(this)) cleanup(this);
+        return result;
+      };
+    }
     // Register senders without changing their enabled/mute state.
     const origAddTrack = RTC.prototype.addTrack;
     if (typeof origAddTrack === 'function') {
