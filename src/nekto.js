@@ -6,7 +6,6 @@ import { audioClientReady, confirmAudioToken, authorizationError } from './live-
 import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
-import { waitForVerificationWidget } from './verification-readiness.js';
 import { observeAudioSession } from './session-observation.js';
 import { tokenExtensionScript, browserLaunchOptions } from './token-extension.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
@@ -28,7 +27,7 @@ export class NektoBrowser {
     this.forwarding = false;
     this.protocolDiagnostics = null;
     this.monitorTimer = null; this.monitorVersion = 0;
-    this.entryRetryUsed = false; this.entryRetryPromise = null; this.searchIntent = false;
+    this.searchIntent = false;
     this.partnerSeen = false; this.callAdvancePromise = null;
     this.manualSearch = process.env.NEKTO_MANUAL_SEARCH === '1';
     this.waitingForManualSearch = false;
@@ -57,17 +56,12 @@ export class NektoBrowser {
         check();
         this.callState = observed.callState;
         this.authorizationDiagnostics = observed.authorizationDiagnostics;
-        if (observed.callState.verification && this.searchIntent && !this.entryRetryUsed && !this.manualSearch) {
+        if (observed.callState.verification) {
           this.forwarding = false;
-          try { await this.retryFromEntry(page, token, check); }
-          catch (error) {
-            if (current()) {
-              await this.recordSessionState(page, token, 'retry-failure', check).catch(() => {});
-              if (!current()) return;
-              this.lastFailure = { code: /^NEKTO_/.test(error.code || '') ? error.code : 'NEKTO_PAGE_LOAD',
-                message: /^NEKTO_/.test(error.code || '') ? error.message : searchError('load').message };
-            }
-          }
+          this.searchIntent = false;
+          this.partnerSeen = false;
+          const failure = authorizationError('verification-required');
+          this.lastFailure = { code: failure.code, message: failure.message };
           return;
         }
         if (observed.callState.partnerConnected) this.partnerSeen = true;
@@ -89,7 +83,7 @@ export class NektoBrowser {
         if (!observed.callState.searching && !observed.callState.partnerConnected &&
             !observed.callState.verification && !observed.callState.attention) this.searchIntent = false;
         const forwarding = canForwardAudio(observed, captureError);
-        if (this.manualSearch && forwarding) {
+        if (forwarding) {
           this.waitingForManualSearch = false;
           this.searchIntent = true;
         }
@@ -148,8 +142,8 @@ export class NektoBrowser {
     this.authorization = null; this.observedStage = null;
     this.controlDiagnostics = null;
     this.protocolDiagnostics = null;
-    this.entryRetryUsed = false; this.searchIntent = true;
-    this.entryRetryPromise = null; this.partnerSeen = false; this.callAdvancePromise = null;
+    this.searchIntent = true;
+    this.partnerSeen = false; this.callAdvancePromise = null;
     this.waitingForManualSearch = false;
     const check = () => {
       if (generation !== this.generation) throw new Error('Nekto search was stopped.');
@@ -185,8 +179,7 @@ export class NektoBrowser {
           if (report.direction === 'decrypt' && report.type === 'registered') {
             console.log(JSON.stringify({ event: 'nekto_register_response', success: report.success }));
           }
-          // Observe protocol messages here; native state checks own the single
-          // entry-page retry, avoiding an independent restart racing with Start.
+          // Observe protocol messages without navigating or retrying Start.
           if (report.direction === 'decrypt' && report.type === 'captcha-request') {
             console.log(JSON.stringify({ event: 'nekto_captcha_request_received', action: 'session_continues',
               captchaVariant: report.captchaVariant || 'unknown', captchaFields: report.captchaFields || '' }));
@@ -203,12 +196,9 @@ export class NektoBrowser {
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       return await this.loadAndSearch(page, token, check, value => { stage = value; });
     } catch (error) {
-      if (generation === this.generation && error.code === 'NEKTO_VERIFICATION' && !this.entryRetryUsed && !this.manualSearch && this.page) {
-        try { return await this.retryFromEntry(this.page, token, check, value => { stage = value; }); }
-        catch (retryError) { error = retryError; }
-      }
       const cancelled = generation !== this.generation;
       if (!cancelled) {
+        this.searchIntent = false; this.partnerSeen = false;
         const page = this.page;
         if (page && !page.isClosed()) {
           await this.recordSessionState(page, token, `${stage}-failure`, check).catch(() => {});
@@ -242,10 +232,7 @@ export class NektoBrowser {
   }
   async loadAndSearch(page, token, check, setStage = () => {}) {
     setStage('load'); check();
-    let response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
-    // The entry URL can be a same-document hash navigation. Reload in that
-    // case so the native client actually initializes again, in the same context.
-    if (!response) { check(); response = await page.reload({ waitUntil: 'domcontentloaded', timeout: 45000 }); }
+    const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
     check();
     if (response && response.status() >= 400) throw searchError('load');
     const injection = await page.evaluate(key => {
@@ -297,32 +284,6 @@ export class NektoBrowser {
     setStage('confirm');
     return this.finishSearch(page, token, check, 'after-start');
   }
-  async retryFromEntry(page, token, check, setStage) {
-    check();
-    if (this.manualSearch || this.entryRetryUsed || page !== this.page || new URL(page.url()).origin !== new URL(NEKTO_URL).origin) {
-      throw authorizationError('verification-required');
-    }
-    this.entryRetryUsed = true;
-    this.forwarding = false; this.protocolDiagnostics = null;
-    const retry = (async () => {
-      setStage?.('captcha-loading');
-      console.log(JSON.stringify({ event: 'nekto_verification_wait', action: 'wait-for-widget' }));
-      const readiness = await waitForVerificationWidget(page, { check });
-      check();
-      if (page !== this.page || new URL(page.url()).origin !== new URL(NEKTO_URL).origin) {
-        throw authorizationError('verification-required');
-      }
-      if (readiness === 'cleared') {
-        await advanceAudioCall(page, { check, endCurrentCall: false, authorize: () => this.authorizePage(page, token, check) });
-        return this.finishSearch(page, token, check, 'verification-cleared');
-      }
-      console.log(JSON.stringify({ event: 'nekto_verification_retry', attempt: 1, action: 'return-to-audio-page', widget: 'loaded' }));
-      return this.loadAndSearch(page, token, check, setStage);
-    })();
-    this.entryRetryPromise = retry;
-    try { return await retry; }
-    finally { if (this.entryRetryPromise === retry) this.entryRetryPromise = null; }
-  }
   async next(token, { endCurrentCall = true } = {}) {
     const page = this.page;
     if (!page || page.isClosed()) return this.search(token);
@@ -330,9 +291,7 @@ export class NektoBrowser {
     const check = () => {
       if (generation !== this.generation || this.page !== page) throw new Error('Nekto search was stopped.');
     };
-    // Let a monitor-owned navigation/confirmation finish before taking control.
-    // Stopping its monitor first would cancel the widget wait midway through.
-    if (this.entryRetryPromise) await this.entryRetryPromise.catch(() => {});
+    // Let a monitor-owned call confirmation finish before taking control.
     if (this.callAdvancePromise) await this.callAdvancePromise.catch(() => {});
     check();
     this.stopSessionMonitor();
@@ -370,10 +329,9 @@ export class NektoBrowser {
       return await this.finishSearch(page, token, check, endCurrentCall ? 'next-confirmation' : 'resume-confirmation');
     } catch (error) {
       check();
-      if (error.code === 'NEKTO_VERIFICATION' && !this.entryRetryUsed && !this.manualSearch) {
-        try { return await this.retryFromEntry(page, token, check); }
-        catch (retryError) { error = retryError; check(); }
-      }
+      // A failed attempt stays in place until an explicit command or native
+      // search resumes. The monitor must not press Start a second time.
+      this.forwarding = false; this.searchIntent = false; this.partnerSeen = false;
       await this.recordSessionState(page, token, 'next-failure', check).catch(() => {});
       this.controlDiagnostics = await inspectStartControls(page, { token }).catch(() => null);
       check();
@@ -447,7 +405,6 @@ export class NektoBrowser {
     this.stopSessionMonitor();
     this.generation++;
     this.searchIntent = false;
-    this.entryRetryUsed = false; this.entryRetryPromise = null;
     this.partnerSeen = false; this.callAdvancePromise = null;
     this.waitingForManualSearch = false;
     this.forwarding = false;

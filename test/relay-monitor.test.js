@@ -101,16 +101,16 @@ test('an in-flight observation cannot re-enable a stopped session', async () => 
   } finally { release(); browser.stopSessionMonitor(); }
 });
 
-test('manual Search resumes native audio and leaves verification in place without recovery', async () => {
+test('manual Search resumes native audio and leaves verification in place without another attempt', async () => {
   const browser = new NektoBrowser(() => {});
   browser.manualSearch = true; browser.waitingForManualSearch = true;
-  let state = { ...connected(), partnerConnected: false, searching: false }, diagnostics = identity(), retries = 0;
+  let state = { ...connected(), partnerConnected: false, searching: false }, diagnostics = identity(), loads = 0;
   const page = { isClosed: () => false,
     evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
       fn.name === 'confirmAudioToken' ? { reason: diagnostics.captcha ? 'verification-required' : 'native-session-confirmed',
         diagnostics: { ...diagnostics } } : null };
   browser.page = page;
-  browser.retryFromEntry = async () => { retries++; };
+  browser.loadAndSearch = async () => { loads++; };
   try {
     browser.startSessionMonitor(page, 'fixture-token');
     await until(() => browser.callState);
@@ -121,7 +121,8 @@ test('manual Search resumes native audio and leaves verification in place withou
     assert.equal(browser.searchIntent, true);
     state.verification = true; diagnostics.captcha = true;
     await until(() => !browser.forwarding);
-    assert.equal(retries, 0);
+    assert.equal(loads, 0);
+    assert.equal(browser.searchIntent, false);
     state.verification = false; diagnostics.captcha = false;
     await until(() => browser.forwarding);
   } finally { await browser.stop(); }
@@ -133,9 +134,9 @@ test('monitor continues after a partner leaves and respects a subsequent manual 
   const page = { isClosed: () => false,
     evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
       fn.name === 'confirmAudioToken' ? { reason: 'native-session-confirmed', diagnostics: identity() } : null };
-  browser.page = page; browser.searchIntent = true; browser.entryRetryUsed = true;
+  browser.page = page; browser.searchIntent = true;
   browser.advanceSearch = async (actual, token, check) => {
-    check(); assert.equal(actual, page); assert.equal(browser.entryRetryUsed, true);
+    check(); assert.equal(actual, page);
     advances++;
     state = { ...state, searching: true, partnerConnected: false, callEnded: false };
     browser.partnerSeen = false;
@@ -150,6 +151,40 @@ test('monitor continues after a partner leaves and respects a subsequent manual 
     await until(() => !browser.searchIntent);
     assert.equal(advances, 1);
     assert.equal(browser.forwarding, false);
+  } finally { await browser.stop(); }
+});
+
+test('automatic verification pauses in place and a cleared idle page cannot restart searching', async () => {
+  const browser = new NektoBrowser(() => {});
+  browser.manualSearch = false;
+  let state = { ...connected(), partnerConnected: false, searching: true }, diagnostics = identity();
+  let loads = 0, advances = 0;
+  const page = { isClosed: () => false,
+    evaluate: async fn => fn.name === 'readAudioCallState' ? { ...state } :
+      fn.name === 'confirmAudioToken' ? { reason: diagnostics.captcha ? 'verification-required' : 'native-session-confirmed',
+        diagnostics: { ...diagnostics } } : null };
+  browser.page = page; browser.searchIntent = true;
+  browser.loadAndSearch = async () => { loads++; };
+  browser.advanceSearch = async () => { advances++; };
+  try {
+    browser.startSessionMonitor(page, 'fixture-token');
+    await until(() => browser.forwarding);
+    state.verification = true; diagnostics.captcha = true;
+    await until(() => browser.lastFailure?.code === 'NEKTO_VERIFICATION');
+    assert.equal(browser.forwarding, false);
+    assert.equal(browser.searchIntent, false);
+    state = { ...state, verification: false, searching: false, callEnded: true };
+    diagnostics.captcha = false;
+    await until(() => browser.callState.callEnded);
+    await new Promise(resolve => setTimeout(resolve, 550));
+    assert.equal(loads, 0);
+    assert.equal(advances, 0);
+    assert.equal(browser.page, page);
+    // An owner-resolved challenge can leave an existing native search running.
+    state = { ...state, searching: true, callEnded: false };
+    await until(() => browser.forwarding);
+    assert.equal(browser.lastFailure, null);
+    assert.equal(browser.searchIntent, true);
   } finally { await browser.stop(); }
 });
 
