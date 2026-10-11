@@ -9,7 +9,7 @@ import { readAudioCallState, waitForAudioSearch } from './call-state.js';
 import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
-import { tokenExtensionScript, browserLaunchOptions, generateFingerprint, fpSeed } from './token-extension.js';
+import { tokenExtensionScript, browserLaunchOptions, generateFingerprint, fpSeed, windowsClientHints } from './token-extension.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
 import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificationReport } from './network-diagnostics.js';
@@ -118,8 +118,11 @@ export class NektoBrowser {
       const { userAgent } = generateFingerprint(token);
       context = await browser.newContext({ userAgent });
       await context.grantPermissions(['microphone'], { origin: new URL(NEKTO_URL).origin });
-      // Spoof Origin to match what a real browser user on nekto.me sends.
-      await context.setExtraHTTPHeaders({ 'origin': 'https://nekto-me.kz' });
+      // Spoof Origin + Windows Client-Hints headers. context.userAgent does NOT
+      // change Sec-CH-UA* headers, so without this Chromium leaks
+      // Sec-CH-UA-Platform: "Linux" → nekto silently excludes Linux from matching
+      // (phantom ban / infinite search). Force them to match the Windows UA.
+      await context.setExtraHTTPHeaders({ 'origin': 'https://nekto-me.kz', ...windowsClientHints(token) });
       check();
       this.context = context;
       const page = await context.newPage();

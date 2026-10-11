@@ -51,6 +51,26 @@ export function generateFingerprint(token) {
     deviceMemory: mem,
     hardwareConcurrency: hw,
     screen: { width: sw, height: sh, availHeight: sh - 40 },
+    chromeMajor: chrome.split('.')[0],
+  };
+}
+
+/**
+ * HTTP Client-Hints headers matching the token's Windows fingerprint.
+ * CRITICAL: Playwright's context.userAgent spoofs navigator.userAgent and the
+ * User-Agent header, but NOT the Sec-CH-UA* client-hint headers. Chromium keeps
+ * sending Sec-CH-UA-Platform: "Linux" from the real OS, which nekto reads
+ * server-side and uses to silently exclude the session from matching (the
+ * reference documents "nekto silently bans the Linux platform from matching").
+ * We force these headers to Windows so the HTTP layer matches navigator.
+ */
+export function windowsClientHints(token) {
+  const { chromeMajor } = generateFingerprint(token);
+  const v = chromeMajor || '128';
+  return {
+    'sec-ch-ua': `"Chromium";v="${v}", "Google Chrome";v="${v}", "Not=A?Brand";v="24"`,
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
   };
 }
 
