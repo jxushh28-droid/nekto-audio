@@ -81,6 +81,7 @@ try {
       concurrency: navigator.hardwareConcurrency,
       plugins: Array.from(navigator.plugins, plugin => ({ name: plugin.name, mime: plugin.item(0)?.type })),
       ownPlugins: Object.hasOwn(navigator, 'plugins'), ownWebdriver: Object.hasOwn(navigator, 'webdriver'),
+      webdriver: navigator.webdriver,
       screen: [screen.width, screen.height, screen.availWidth, screen.availHeight],
       crypto: [native(crypto.subtle.encrypt), native(crypto.subtle.decrypt)],
       rtc: native(RTCPeerConnection), gum: native(navigator.mediaDevices.getUserMedia),
@@ -90,6 +91,7 @@ try {
   baseline = await browser.newContext({ viewport: null });
   const normal = await baseline.newPage(); await normal.goto(NEKTO_URL);
   const expectedIdentity = await normal.evaluate(identity);
+  assert.equal(expectedIdentity.webdriver, true, 'Browser launch suppressed the native automation indicator');
   await baseline.close(); baseline = null;
   relay = new NektoBrowser(() => {}, directory); relay.browser = browser;
   assert.match(await relay.openSession('fixture-native-token'), /^Searching on Nekto/);
@@ -200,6 +202,14 @@ try {
   const frame = page.frameLocator('iframe');
   await frame.getByRole('button', { name: 'Начать разговор', exact: true }).waitFor();
   assert.equal(await frame.locator('body').evaluate(() => localStorage.getItem('storage_audio_v2')), null, 'CAPTCHA frame received the token');
+  const googleTab = await relay.context.newPage();
+  await googleTab.goto('https://www.google.com/fixture');
+  assert.equal(await googleTab.evaluate(() => localStorage.getItem('storage_audio_v2')), null, 'Third-party tab received the token');
+  assert.equal(await googleTab.evaluate(() => !!window.__nektoRelay), false);
+  assert.equal(await googleTab.evaluate(() => typeof window.showChallenge), 'function', 'JavaScript did not run in the new tab');
+  assert.deepEqual(await googleTab.evaluate(identity), expectedIdentity);
+  assert.equal(await frame.locator('body').evaluate(() => localStorage.getItem('storage_audio_v2')), null);
+  await googleTab.close();
   await page.goto('https://www.google.com/fixture');
   assert.equal(await page.evaluate(() => localStorage.getItem('storage_audio_v2')), null, 'Third-party navigation received the token');
   assert.equal(await page.evaluate(() => !!window.__nektoRelay), false);
@@ -208,7 +218,7 @@ try {
     assert.equal(request.headers.origin, undefined, 'Google document request received a forced Nekto Origin');
   }
   assert(requests.some(request => request.host === 'www.google.com'));
-  console.log('Browser compatibility passed: production session, native identity/crypto, scoped Google/CAPTCHA setup, single Start attempt, delayed widget/image loading without entry navigation or reload, Next/join preserve verification, manual Stop respected, manual Search/Next with no automatic Start or challenge reload.');
+  console.log('Browser compatibility passed: production session, native identity/crypto and automation indicator, new-tab JavaScript, scoped Google/CAPTCHA setup, single Start attempt, delayed widget/image loading without entry navigation or reload, Next/join preserve verification, manual Stop respected, manual Search/Next with no automatic Start or challenge reload.');
 } finally {
   await baseline?.close();
   await relay?.close();

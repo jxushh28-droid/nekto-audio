@@ -50,7 +50,6 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
       '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
-      '--disable-blink-features=AutomationControlled',
       ...(silentMicrophonePath ? [`--use-file-for-fake-audio-capture=${silentMicrophonePath}`] : []),
     ],
   };
