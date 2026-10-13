@@ -1,7 +1,6 @@
 import { chromium } from 'playwright';
 import { resolve } from 'node:path';
 import { installBrowserRelay, inspectBrowserMicrophone } from './browser-init.js';
-import { installHeadlessNormalize } from './headless-normalize.js';
 import { searchError } from './search-error.js';
 import { audioClientReady, confirmAudioToken, authorizationError } from './live-session.js';
 import { readAudioCallState, waitForAudioSearch } from './call-state.js';
@@ -215,10 +214,6 @@ export class NektoBrowser {
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
       });
       await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
-      // Normalize headless-vs-headful JS tells (notifications permission, webdriver,
-      // window.chrome, outer dimensions) so a headless run looks like the headful
-      // browser nekto accepts. No-op in headful.
-      await page.addInitScript(installHeadlessNormalize);
       // Guard every navigation/frame: only the Nekto origin receives the token.
       await page.addInitScript({ content: tokenExtensionScript(token) });
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
