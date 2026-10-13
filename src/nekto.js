@@ -123,6 +123,15 @@ export class NektoBrowser {
           // A challenge may clear while the original search remains active.
           if (this.lastFailure?.code === 'NEKTO_VERIFICATION') this.lastFailure = null;
         }
+        // Idle mouse liveness: nudge the cursor occasionally so the session keeps
+        // producing mousemove events (headless otherwise has none). Throttled.
+        if (Date.now() - (this.lastJitterAt || 0) > 4000 + Math.random() * 4000) {
+          this.lastJitterAt = Date.now();
+          try {
+            const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight })); check();
+            await page.mouse.move(20 + Math.random() * (vp.w - 40), 20 + Math.random() * (vp.h - 40), { steps: 6 + Math.floor(Math.random() * 10) });
+          } catch (_) {}
+        }
       } catch {
         if (current()) this.forwarding = false;
       } finally {
@@ -289,6 +298,22 @@ export class NektoBrowser {
       }
     }
   }
+  // Simulate human mouse presence. Headless never has a cursor, so there are zero
+  // mousemove/hover events — a dead giveaway. Wander the pointer with smooth multi-
+  // step moves and small pauses, then hover the target before it gets clicked.
+  async humanize(page, button) {
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    let vp;
+    try { vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight })); } catch (_) { vp = { w: 1280, h: 800 }; }
+    let x = rnd(vp.w * 0.3, vp.w * 0.7), y = rnd(vp.h * 0.3, vp.h * 0.7);
+    for (let i = 0; i < 4 + Math.floor(Math.random() * 3); i++) {
+      x = Math.max(4, Math.min(vp.w - 4, x + rnd(-vp.w * 0.2, vp.w * 0.2)));
+      y = Math.max(4, Math.min(vp.h - 4, y + rnd(-vp.h * 0.2, vp.h * 0.2)));
+      try { await page.mouse.move(x, y, { steps: Math.floor(rnd(6, 18)) }); } catch (_) {}
+      await new Promise(r => setTimeout(r, rnd(90, 360)));
+    }
+    if (button) { try { await button.hover({ timeout: 2000 }); } catch (_) {} await new Promise(r => setTimeout(r, rnd(140, 420))); }
+  }
   async loadAndSearch(page, token, check, setStage = () => {}) {
     setStage('load'); check();
     const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -433,7 +458,10 @@ export class NektoBrowser {
     this.authorizationDiagnostics = identity.diagnostics || null;
     if (!identity.ok) throw authorizationError(identity.reason);
     if (this.manualSearch) return this.awaitManualSearch(page, token, check);
-    setStage('click'); await button.click({ timeout: 5000 }); check();
+    // Human presence before clicking Start: headless has ZERO mouse activity, which
+    // is a strong bot signal. Wander the cursor, then hover the button, then click.
+    await this.humanize(page, button).catch(() => {}); check();
+    setStage('click'); await button.click({ timeout: 5000, delay: 40 + Math.floor(Math.random() * 90) }); check();
     setStage('confirm');
     return this.finishSearch(page, token, check, 'after-start');
   }
