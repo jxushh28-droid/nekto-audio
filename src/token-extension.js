@@ -49,13 +49,19 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
   // uses it with no captcha. A cold token in headless searches forever and gets
   // flagged — that is the real headful-vs-headless difference, not the fingerprint.
   // So: NEKTO_HEADLESS=1 = plain headless with real Chrome + the reference's flags.
-  const headless = env.NEKTO_HEADLESS === '1';
+  // Force Chrome's NEW headless (--headless=new) rather than Playwright's legacy
+  // headless, whose UA contains "HeadlessChrome" (nekto reads the UA). We set
+  // Playwright headless:false and switch Chrome via the arg, so Playwright doesn't
+  // inject the legacy flag. NEKTO_HEADLESS=legacy forces old headless for comparison.
+  const wantHeadless = env.NEKTO_HEADLESS === '1';
+  const legacyHeadless = env.NEKTO_HEADLESS === 'legacy';
   return {
     channel: env.NEKTO_BROWSER_CHANNEL || (server ? 'chromium' : 'chrome'),
-    headless,
+    headless: legacyHeadless,
     ignoreDefaultArgs: ['--mute-audio'],
     args: [
       ...(platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
+      ...(wantHeadless ? ['--headless=new'] : []),
       '--autoplay-policy=no-user-gesture-required',
       '--disable-blink-features=AutomationControlled',
       '--allow-running-insecure-content', '--disable-web-security',
