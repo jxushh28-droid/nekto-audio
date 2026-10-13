@@ -53,6 +53,11 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
       '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
+      // Normal desktop window size. Default headless Chromium is 800x600, which
+      // makes nekto render its cramped/narrow layout and is itself a bot tell;
+      // viewport:null (set per context) follows this window. Override with
+      // NEKTO_WINDOW_SIZE=WxH.
+      `--window-size=${(env.NEKTO_WINDOW_SIZE || '1366,768').replace(/x/i, ',')}`,
       `--use-file-for-fake-audio-capture=${silentMicrophonePath}`,
     ],
   };
