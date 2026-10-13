@@ -299,11 +299,24 @@ function pageCoords(e){
   const y=Math.round((e.clientY-r.top)/r.height*nh);
   return {x,y};
 }
+const live=document.getElementById('livestate');
 function sendInput(params){
   const q=new URLSearchParams(params);
-  fetch('/input?'+q.toString()).then(()=>setTimeout(refreshShot,120)).catch(()=>{});
+  return fetch('/input?'+q.toString())
+    .then(r=>r.json()).then(d=>{
+      if(live)live.textContent=d.ok?('● sent '+params.type+(params.x!=null?' @'+params.x+','+params.y:'')):'● input failed (no active page)';
+      setTimeout(refreshShot,150);setTimeout(refreshShot,500);
+      return d.ok;
+    }).catch(()=>{if(live)live.textContent='● input error';});
 }
-shot.addEventListener('click',e=>{const{x,y}=pageCoords(e);sendInput({type:'click',x,y});shot.focus();});
+function flash(e){
+  const r=shot.getBoundingClientRect();
+  const d=document.createElement('div');
+  d.style.cssText='position:fixed;left:'+(e.clientX-8)+'px;top:'+(e.clientY-8)+'px;width:16px;height:16px;border:2px solid #4ade80;border-radius:50%;pointer-events:none;z-index:9999;transition:all .4s;opacity:1';
+  document.body.appendChild(d);requestAnimationFrame(()=>{d.style.transform='scale(2)';d.style.opacity='0';});
+  setTimeout(()=>d.remove(),450);
+}
+shot.addEventListener('click',e=>{flash(e);const{x,y}=pageCoords(e);sendInput({type:'click',x,y});shot.focus();});
 shot.addEventListener('wheel',e=>{e.preventDefault();sendInput({type:'scroll',dy:Math.round(e.deltaY)});},{passive:false});
 shot.addEventListener('keydown',e=>{
   const named=['Enter','Backspace','Tab','Escape','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Home','End'];

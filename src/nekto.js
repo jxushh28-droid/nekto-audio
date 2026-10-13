@@ -186,7 +186,11 @@ export class NektoBrowser {
       check();
       context = await browser.newContext({ viewport: null, ...(this.proxy ? { proxy: this.proxy } : {}) });
       if (this.proxy) console.log(JSON.stringify({ event: 'nekto_proxy_active', server: this.proxy.server }));
-      await context.grantPermissions(['microphone'], { origin: new URL(NEKTO_URL).origin });
+      // Grant notifications too: headless defaults Notification.permission to
+      // 'denied', which nekto reads (notificationPermission/permissionsState) as a
+      // headless signal. Granting it makes both report a real non-headless value
+      // with no JS tampering. Microphone is needed for the audio relay.
+      await context.grantPermissions(['microphone', 'notifications'], { origin: new URL(NEKTO_URL).origin });
       check();
       this.context = context;
       const page = await context.newPage();
@@ -232,7 +236,7 @@ export class NektoBrowser {
           try {
             const def = (prop, val) => { try { Object.defineProperty(window.screen, prop, { get: () => val, configurable: true }); } catch (_) {} };
             def('width', w); def('height', h);
-            def('availWidth', w); def('availHeight', h - 40);
+            def('availWidth', w); def('availHeight', h);
             def('availLeft', 0); def('availTop', 0);
             try { Object.defineProperty(window, 'devicePixelRatio', { get: () => 1, configurable: true }); } catch (_) {}
           } catch (_) {}
@@ -335,16 +339,19 @@ export class NektoBrowser {
     }).catch(() => {});
     // Non-render environment probes — the remaining headless-vs-headful differences
     // after render FP matched (focus, window dims, webdriver, concurrency).
-    page.evaluate(() => {
+    page.evaluate(async () => {
+      let notifPerm = '?', permState = '?';
+      try { notifPerm = (typeof Notification !== 'undefined') ? Notification.permission : 'none'; } catch (_) {}
+      try { permState = (await navigator.permissions.query({ name: 'notifications' })).state; } catch (_) {}
       try {
         return [
           'wd=' + navigator.webdriver,
           'focus=' + document.hasFocus(),
           'vis=' + document.visibilityState,
-          'outer=' + window.outerWidth + 'x' + window.outerHeight,
-          'inner=' + window.innerWidth + 'x' + window.innerHeight,
           'screen=' + screen.width + 'x' + screen.height,
           'avail=' + screen.availWidth + 'x' + screen.availHeight,
+          'notif=' + notifPerm,
+          'perm=' + permState,
           'hc=' + navigator.hardwareConcurrency,
           'dm=' + (navigator.deviceMemory || '?'),
         ].join(' ');
