@@ -220,6 +220,24 @@ export class NektoBrowser {
       await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
       // Guard every navigation/frame: only the Nekto origin receives the token.
       await page.addInitScript({ content: tokenExtensionScript(token) });
+      // Headless-only: Chrome reports window.screen = 800x600 in headless regardless
+      // of --window-size, so the 1920x1080 window ends up LARGER than the screen —
+      // physically impossible, and nekto's #1 headless tell (confirmed: headful
+      // screen=1920x1080, headless screen=800x600, everything else identical).
+      // screen.* are plain value properties (not functions), so overriding them to
+      // match the real window does NOT trip nekto's native-code tamper check.
+      if (process.env.NEKTO_HEADLESS === '1' || process.env.NEKTO_HEADLESS === 'legacy') {
+        const [sw, sh] = (process.env.NEKTO_WINDOW_SIZE || '1920,1080').replace(/x/i, ',').split(',').map(n => parseInt(n, 10) || 0);
+        await page.addInitScript(({ w, h }) => {
+          try {
+            const def = (prop, val) => { try { Object.defineProperty(window.screen, prop, { get: () => val, configurable: true }); } catch (_) {} };
+            def('width', w); def('height', h);
+            def('availWidth', w); def('availHeight', h - 40);
+            def('availLeft', 0); def('availTop', 0);
+            try { Object.defineProperty(window, 'devicePixelRatio', { get: () => 1, configurable: true }); } catch (_) {}
+          } catch (_) {}
+        }, { w: sw || 1920, h: sh || 1080 });
+      }
       page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
       return await this.loadAndSearch(page, token, check, value => { stage = value; });
     } catch (error) {
