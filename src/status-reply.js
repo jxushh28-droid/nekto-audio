@@ -15,7 +15,8 @@ export function statusReply({ status, voice, token, queue }) {
   const autoNext = typeof status.autoNext === 'boolean' ? `\nAutomatic next: ${status.autoNext ? 'ON' : 'OFF'}` : '';
   const network = `\nBrowser IP: ${status.browserIp || 'unknown'}${status.proxy ? ` (via proxy ${status.proxy})` : ' (direct)'}` +
     `\nWebGL renderer: ${status.webglRenderer || 'unknown'}` +
-    `\nCanvas/Audio FP: ${status.canvasHash || '?'} / ${status.audioHash || '?'}`;
+    `\nCanvas/Audio FP: ${status.canvasHash || '?'} / ${status.audioHash || '?'}` +
+    `\nEnv: ${status.envProbe || '?'}`;
   const render = tokenLine => `Discord voice: ${voice}\nNekto: ${status.active ? status.callState?.phase || 'open; search state unknown' : 'stopped'}${manual}${autoNext}${network}\nLast token authorization: ${status.authorization || 'unconfirmed'}\nToken: ${tokenLine}\nAudio frames received: ${queue.received}\nAudio frames containing sound: ${queue.nonSilent}${details}${registration}${protocol}${observation}${controls}${microphone}${prompt}\nLast failure: ${status.lastFailure ? `${status.lastFailure.code}: ${status.lastFailure.message}` : 'none'}\n${status.error || ''}`;
   const content = render(token || 'not set');
   if (content.length <= 2000) return { content, allowedMentions: { parse: [] } };

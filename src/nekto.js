@@ -42,6 +42,7 @@ export class NektoBrowser {
     this.webglRenderer = null;
     this.canvasHash = null;
     this.audioHash = null;
+    this.envProbe = null;
   }
 
   // Set/clear the outbound proxy. Takes a raw string ("socks5://ip:port",
@@ -314,6 +315,25 @@ export class NektoBrowser {
       if (fp) { this.canvasHash = fp.canvas; this.audioHash = fp.audio;
         console.log(JSON.stringify({ event: 'nekto_render_fp', canvas: fp.canvas, audio: fp.audio })); }
     }).catch(() => {});
+    // Non-render environment probes — the remaining headless-vs-headful differences
+    // after render FP matched (focus, window dims, webdriver, concurrency).
+    page.evaluate(() => {
+      try {
+        return [
+          'wd=' + navigator.webdriver,
+          'focus=' + document.hasFocus(),
+          'vis=' + document.visibilityState,
+          'outer=' + window.outerWidth + 'x' + window.outerHeight,
+          'inner=' + window.innerWidth + 'x' + window.innerHeight,
+          'screen=' + screen.width + 'x' + screen.height,
+          'avail=' + screen.availWidth + 'x' + screen.availHeight,
+          'hc=' + navigator.hardwareConcurrency,
+          'dm=' + (navigator.deviceMemory || '?'),
+        ].join(' ');
+      } catch (_) { return null; }
+    }).then(env => {
+      if (env) { this.envProbe = env; console.log(JSON.stringify({ event: 'nekto_env_probe', env })); }
+    }).catch(() => {});
     const injection = await page.evaluate(key => {
       let lsAuthToken = false, storeAuthToken = null;
       try {
@@ -464,7 +484,7 @@ export class NektoBrowser {
   }
   async status(token) {
     const page = this.page;
-    if (!page || page.isClosed()) return { active: false, autoNext: this.autoNext, browserIp: this.browserIp, webglRenderer: this.webglRenderer, canvasHash: this.canvasHash, audioHash: this.audioHash, proxy: this.proxy?.server || null, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    if (!page || page.isClosed()) return { active: false, autoNext: this.autoNext, browserIp: this.browserIp, webglRenderer: this.webglRenderer, canvasHash: this.canvasHash, audioHash: this.audioHash, envProbe: this.envProbe, proxy: this.proxy?.server || null, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
     this.callState = await page.evaluate(readAudioCallState);
     if (token) {
       const identity = await page.evaluate(confirmAudioToken, { token, timeout: 1 });
@@ -478,7 +498,7 @@ export class NektoBrowser {
       inboundPackets: status.inboundPackets || 0, inboundBytes: status.inboundBytes || 0,
       audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
     return { ...status, autoNext: this.autoNext, manualSearch: this.manualSearch, waitingForManualSearch: this.waitingForManualSearch,
-      browserIp: this.browserIp, webglRenderer: this.webglRenderer, canvasHash: this.canvasHash, audioHash: this.audioHash, proxy: this.proxy?.server || null,
+      browserIp: this.browserIp, webglRenderer: this.webglRenderer, canvasHash: this.canvasHash, audioHash: this.audioHash, envProbe: this.envProbe, proxy: this.proxy?.server || null,
       protocolDiagnostics: this.protocolDiagnostics, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async screenshot() {
