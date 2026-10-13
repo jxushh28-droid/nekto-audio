@@ -40,6 +40,8 @@ export class NektoBrowser {
     this.proxy = parseProxy(process.env.NEKTO_PROXY || '');
     this.browserIp = null;
     this.webglRenderer = null;
+    this.canvasHash = null;
+    this.audioHash = null;
   }
 
   // Set/clear the outbound proxy. Takes a raw string ("socks5://ip:port",
@@ -282,6 +284,36 @@ export class NektoBrowser {
     }).then(r => {
       if (r) { this.webglRenderer = r; console.log(JSON.stringify({ event: 'nekto_webgl_renderer', renderer: r })); }
     }).catch(() => {});
+    // Canvas + audio fingerprint probes — to compare headful vs headless and find
+    // which render signal differs (nekto reads both). djb2 hash of the output.
+    page.evaluate(async () => {
+      const djb2 = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = (h * 33 + s.charCodeAt(i)) >>> 0; return h.toString(16); };
+      const out = { canvas: null, audio: null };
+      try {
+        const c = document.createElement('canvas'); c.width = 280; c.height = 60;
+        const ctx = c.getContext('2d');
+        ctx.textBaseline = 'top'; ctx.font = "16px 'Arial'";
+        ctx.fillStyle = '#f60'; ctx.fillRect(2, 2, 180, 20);
+        ctx.fillStyle = '#069'; ctx.fillText('Nekto FP \u{1F600} 12345', 4, 24);
+        ctx.fillStyle = 'rgba(102,204,0,0.7)'; ctx.fillText('Nekto FP \u{1F600} 12345', 6, 26);
+        out.canvas = djb2(c.toDataURL());
+      } catch (_) {}
+      try {
+        const Off = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        const octx = new Off(1, 44100, 44100);
+        const osc = octx.createOscillator(); osc.type = 'triangle'; osc.frequency.value = 10000;
+        const comp = octx.createDynamicsCompressor();
+        osc.connect(comp); comp.connect(octx.destination); osc.start(0);
+        const buf = await octx.startRendering();
+        const data = buf.getChannelData(0); let sum = 0;
+        for (let i = 4500; i < 5000; i++) sum += Math.abs(data[i]);
+        out.audio = sum.toString();
+      } catch (_) {}
+      return out;
+    }).then(fp => {
+      if (fp) { this.canvasHash = fp.canvas; this.audioHash = fp.audio;
+        console.log(JSON.stringify({ event: 'nekto_render_fp', canvas: fp.canvas, audio: fp.audio })); }
+    }).catch(() => {});
     const injection = await page.evaluate(key => {
       let lsAuthToken = false, storeAuthToken = null;
       try {
@@ -432,7 +464,7 @@ export class NektoBrowser {
   }
   async status(token) {
     const page = this.page;
-    if (!page || page.isClosed()) return { active: false, autoNext: this.autoNext, browserIp: this.browserIp, webglRenderer: this.webglRenderer, proxy: this.proxy?.server || null, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    if (!page || page.isClosed()) return { active: false, autoNext: this.autoNext, browserIp: this.browserIp, webglRenderer: this.webglRenderer, canvasHash: this.canvasHash, audioHash: this.audioHash, proxy: this.proxy?.server || null, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
     this.callState = await page.evaluate(readAudioCallState);
     if (token) {
       const identity = await page.evaluate(confirmAudioToken, { token, timeout: 1 });
@@ -446,7 +478,7 @@ export class NektoBrowser {
       inboundPackets: status.inboundPackets || 0, inboundBytes: status.inboundBytes || 0,
       audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
     return { ...status, autoNext: this.autoNext, manualSearch: this.manualSearch, waitingForManualSearch: this.waitingForManualSearch,
-      browserIp: this.browserIp, webglRenderer: this.webglRenderer, proxy: this.proxy?.server || null,
+      browserIp: this.browserIp, webglRenderer: this.webglRenderer, canvasHash: this.canvasHash, audioHash: this.audioHash, proxy: this.proxy?.server || null,
       protocolDiagnostics: this.protocolDiagnostics, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async screenshot() {
