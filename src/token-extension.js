@@ -42,30 +42,37 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
   if (typeof silentMicrophonePath !== 'string' || !silentMicrophonePath) throw new Error('A silent microphone file is required.');
   const server = !!env.RAILWAY_PROJECT_ID ||
     (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY);
-  // Headless by default everywhere (no visible window). Show the browser only for
-  // Headless mode selection. CONFIRMED: nekto restricts starting a call under BOTH
-  // Playwright's legacy headless AND Chrome's new headless (--headless=new) — it
-  // detects the headless render/GPU path. Only a REAL headful browser passes.
-  // So to run "invisibly" we keep the browser fully headful but move its window
-  // OFF-SCREEN (--window-position=-32000,-32000). It behaves identically to the
-  // visible headful mode that works, just with no window on screen.
-  //   default            → headful, visible window
-  //   NEKTO_HEADLESS=1    → headful, window moved off-screen (invisible, still works)
-  //   NEKTO_HEADLESS=new  → Chrome new headless (detected; debug only)
-  //   NEKTO_HEADLESS=legacy → old headless (detected; debug only)
+  // Why headless gets banned: it's NOT the missing window — headless Chrome renders
+  // WebGL with software SwiftShader instead of the real GPU, and nekto reads the
+  // WebGL renderer to detect it. Chrome's "new" headless CAN use the real GPU if we
+  // force the hardware ANGLE backend and stop Chrome disabling the GPU. That gives a
+  // true no-window browser whose WebGL reports the real card — invisible, but looks
+  // like headful to nekto.
+  //   default                     → headful, visible window
+  //   NEKTO_HEADLESS=1             → new headless + real GPU (no window)
+  //   NEKTO_HEADLESS=swiftshader   → new headless, software GL (debug; detected)
+  //   NEKTO_HEADLESS=legacy        → old headless (debug; detected)
   const mode = env.NEKTO_HEADLESS;
-  const hiddenHeadful = mode === '1';
-  const newHeadless = mode === 'new';
+  const gpuHeadless = mode === '1';
+  const swHeadless = mode === 'swiftshader' || mode === 'new';
   const legacyHeadless = mode === 'legacy';
   return {
     channel: env.NEKTO_BROWSER_CHANNEL || (server ? 'chromium' : 'chrome'),
     headless: legacyHeadless,
-    ignoreDefaultArgs: ['--mute-audio'],
+    // Keep the GPU in new headless — Playwright otherwise injects flags that disable it.
+    ignoreDefaultArgs: gpuHeadless
+      ? ['--mute-audio', '--disable-gpu', '--disable-gpu-compositing', '--disable-software-rasterizer']
+      : ['--mute-audio'],
     args: [
       ...(platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
-      ...(newHeadless ? ['--headless=new'] : []),
-      // Off-screen window = invisible but fully headful (passes nekto's check).
-      ...(hiddenHeadful ? ['--window-position=-32000,-32000'] : []),
+      ...((gpuHeadless || swHeadless) ? ['--headless=new'] : []),
+      // Force the real GPU in new headless so WebGL reports the real card, not
+      // SwiftShader (the signal nekto uses to spot headless).
+      ...(gpuHeadless ? [
+        '--enable-gpu', '--ignore-gpu-blocklist',
+        ...(platform === 'win32' ? ['--use-angle=d3d11']
+          : platform === 'darwin' ? ['--use-angle=metal'] : ['--use-angle=gl']),
+      ] : []),
       '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
