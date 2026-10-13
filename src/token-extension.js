@@ -42,7 +42,9 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
   if (typeof silentMicrophonePath !== 'string' || !silentMicrophonePath) throw new Error('A silent microphone file is required.');
   const server = !!env.RAILWAY_PROJECT_ID ||
     (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY);
-  const headless = env.NEKTO_HEADLESS === '1' || (env.NEKTO_HEADLESS !== '0' && server);
+  // Headless by default everywhere (no visible window). Show the browser only for
+  // debugging via NEKTO_HEADFUL=1 (or the legacy NEKTO_HEADLESS=0).
+  const headless = !(env.NEKTO_HEADFUL === '1' || env.NEKTO_HEADLESS === '0');
   return {
     channel: env.NEKTO_BROWSER_CHANNEL || (server ? 'chromium' : 'chrome'),
     headless, ignoreDefaultArgs: ['--mute-audio'],
