@@ -340,20 +340,34 @@ export class NektoBrowser {
     // Non-render environment probes — the remaining headless-vs-headful differences
     // after render FP matched (focus, window dims, webdriver, concurrency).
     page.evaluate(async () => {
-      let notifPerm = '?', permState = '?';
-      try { notifPerm = (typeof Notification !== 'undefined') ? Notification.permission : 'none'; } catch (_) {}
+      const g = (fn, d) => { try { return fn(); } catch (_) { return d; } };
+      let notifPerm = g(() => Notification.permission, '?');
+      let permState = '?';
       try { permState = (await navigator.permissions.query({ name: 'notifications' })).state; } catch (_) {}
+      // speechSynthesis voices: headless = 0, real Windows Chrome = many. Give it a tick.
+      let voices = g(() => speechSynthesis.getVoices().length, -1);
+      if (voices === 0) { try { await new Promise(r => { speechSynthesis.onvoiceschanged = r; setTimeout(r, 400); }); voices = speechSynthesis.getVoices().length; } catch (_) {} }
+      let mediaKinds = '?';
+      try { const ds = await navigator.mediaDevices.enumerateDevices(); mediaKinds = ds.length + '/' + ds.filter(d => d.label).length + 'lbl'; } catch (_) {}
+      const uad = g(() => navigator.userAgentData, null);
+      let hev = '?';
+      if (uad && uad.getHighEntropyValues) { try { const h = await uad.getHighEntropyValues(['platform', 'platformVersion', 'architecture', 'bitness', 'model', 'uaFullVersion']); hev = [h.platform, h.platformVersion, h.architecture, h.bitness, h.model || '-'].join(','); } catch (_) {} }
       try {
         return [
           'wd=' + navigator.webdriver,
-          'focus=' + document.hasFocus(),
-          'vis=' + document.visibilityState,
-          'screen=' + screen.width + 'x' + screen.height,
-          'avail=' + screen.availWidth + 'x' + screen.availHeight,
-          'notif=' + notifPerm,
-          'perm=' + permState,
-          'hc=' + navigator.hardwareConcurrency,
-          'dm=' + (navigator.deviceMemory || '?'),
+          'plat=' + navigator.platform,
+          'uadPlat=' + (uad ? uad.platform : '?') + '/mob=' + (uad ? uad.mobile : '?'),
+          'hev=' + hev,
+          'voices=' + voices,
+          'plugins=' + g(() => navigator.plugins.length, -1),
+          'mimes=' + g(() => navigator.mimeTypes.length, -1),
+          'media=' + mediaKinds,
+          'mtp=' + navigator.maxTouchPoints,
+          'conn=' + g(() => navigator.connection.effectiveType, '?'),
+          'lang=' + navigator.languages.join(','),
+          'tz=' + g(() => Intl.DateTimeFormat().resolvedOptions().timeZone, '?'),
+          'notif=' + notifPerm + '/' + permState,
+          'screen=' + screen.width + 'x' + screen.height + '/' + screen.colorDepth + 'bit',
         ].join(' ');
       } catch (_) { return null; }
     }).then(env => {
