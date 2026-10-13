@@ -200,7 +200,10 @@ h1{font-size:18px;font-weight:600;color:#fff;margin-bottom:16px;letter-spacing:.
 <div class="grid" id="grid"></div>
 <div style="margin-top:16px">
   <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#555;margin-bottom:8px">Browser view <span id="livestate" style="color:#4ade80;font-weight:400">● live — click to interact, type to send keys</span></div>
-  <img id="shot" src="/screenshot" tabindex="0" style="width:100%;max-width:1100px;border-radius:6px;border:1px solid #222;display:block;cursor:crosshair;outline:none" alt="browser view">
+  <div id="shotwrap" tabindex="0" style="position:relative;width:100%;max-width:1100px;aspect-ratio:1920/985;background:#0a0a0c;border-radius:6px;border:1px solid #222;outline:none;overflow:hidden;cursor:crosshair">
+    <img id="shot" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none" alt="">
+    <div id="shotmsg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#666;font-size:13px;text-align:center;padding:20px">Waiting for an active browser session — use /join to start.</div>
+  </div>
 </div>
 <script>
 const dot=c=>'<span class="dot"></span>';
@@ -283,21 +286,27 @@ function render(d){
   document.getElementById('grid').innerHTML=cards.join('');
 }
 const shot=document.getElementById('shot');
+const shotwrap=document.getElementById('shotwrap');
+const shotmsg=document.getElementById('shotmsg');
 let shotBusy=false;
 function refreshShot(){
   if(shotBusy)return;shotBusy=true;
   const img=new Image();
-  img.onload=()=>{shot.src=img.src;shotBusy=false;};
-  img.onerror=()=>{shotBusy=false;};
+  img.onload=()=>{shot.src=img.src;shot.style.display='block';shotmsg.style.display='none';shotBusy=false;};
+  img.onerror=()=>{shot.style.display='none';shotmsg.style.display='flex';shotmsg.textContent='No active browser session — use /join to start, then this view goes live.';shotBusy=false;};
   img.src='/screenshot?t='+Date.now();
 }
-// Map a click on the displayed image to page (viewport) coordinates.
+// Map a click on the displayed image to page (viewport) coordinates. The image is
+// object-fit:contain inside the wrapper, so compute the real drawn rect.
 function pageCoords(e){
-  const r=shot.getBoundingClientRect();
-  const nw=shot.naturalWidth||r.width, nh=shot.naturalHeight||r.height;
-  const x=Math.round((e.clientX-r.left)/r.width*nw);
-  const y=Math.round((e.clientY-r.top)/r.height*nh);
-  return {x,y};
+  const r=shotwrap.getBoundingClientRect();
+  const nw=shot.naturalWidth||1920, nh=shot.naturalHeight||985;
+  const scale=Math.min(r.width/nw, r.height/nh);
+  const dw=nw*scale, dh=nh*scale;
+  const ox=(r.width-dw)/2, oy=(r.height-dh)/2;
+  const x=Math.round((e.clientX-r.left-ox)/scale);
+  const y=Math.round((e.clientY-r.top-oy)/scale);
+  return {x:Math.max(0,Math.min(nw,x)), y:Math.max(0,Math.min(nh,y))};
 }
 const live=document.getElementById('livestate');
 function sendInput(params){
@@ -316,9 +325,9 @@ function flash(e){
   document.body.appendChild(d);requestAnimationFrame(()=>{d.style.transform='scale(2)';d.style.opacity='0';});
   setTimeout(()=>d.remove(),450);
 }
-shot.addEventListener('click',e=>{flash(e);const{x,y}=pageCoords(e);sendInput({type:'click',x,y});shot.focus();});
-shot.addEventListener('wheel',e=>{e.preventDefault();sendInput({type:'scroll',dy:Math.round(e.deltaY)});},{passive:false});
-shot.addEventListener('keydown',e=>{
+shotwrap.addEventListener('click',e=>{flash(e);const{x,y}=pageCoords(e);sendInput({type:'click',x,y});shotwrap.focus();});
+shotwrap.addEventListener('wheel',e=>{e.preventDefault();sendInput({type:'scroll',dy:Math.round(e.deltaY)});},{passive:false});
+shotwrap.addEventListener('keydown',e=>{
   const named=['Enter','Backspace','Tab','Escape','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Home','End'];
   if(named.includes(e.key)){e.preventDefault();sendInput({type:'key',key:e.key});}
   else if(e.key.length===1&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();sendInput({type:'text',text:e.key});}
