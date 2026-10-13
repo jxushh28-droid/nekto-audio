@@ -43,22 +43,32 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
   const server = !!env.RAILWAY_PROJECT_ID ||
     (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY);
   // Headless by default everywhere (no visible window). Show the browser only for
-  // debugging via NEKTO_HEADFUL=1 (or the legacy NEKTO_HEADLESS=0).
-  // Temporarily defaulting to HEADFUL (visible window) to debug the start
-  // restriction. Set NEKTO_HEADLESS=1 to force headless.
-  const headless = env.NEKTO_HEADLESS === '1';
+  // Headless mode selection. CONFIRMED: nekto restricts starting a call under
+  // Playwright's legacy headless (headless: true) — its UA contains
+  // "HeadlessChrome" and it uses a different render path, both detectable. A
+  // visible (headful) window works. To run windowless AND still work, use Chrome's
+  // "new" headless (--headless=new), which shares the real browser's code path
+  // (normal UA, real rendering) so it passes nekto's check.
+  //   default                 → headful (visible window)
+  //   NEKTO_HEADLESS=1         → new headless (no window, behaves like headful)
+  //   NEKTO_HEADLESS=legacy    → old headless (for debugging only; nekto blocks it)
+  const mode = env.NEKTO_HEADLESS;
+  const newHeadless = mode === '1' || mode === 'new';
+  const legacyHeadless = mode === 'legacy';
   return {
     channel: env.NEKTO_BROWSER_CHANNEL || (server ? 'chromium' : 'chrome'),
-    headless, ignoreDefaultArgs: ['--mute-audio'],
+    // For new headless we keep Playwright's headless:false (so it doesn't inject
+    // legacy --headless) and switch Chrome to new headless via the arg below.
+    headless: legacyHeadless,
+    ignoreDefaultArgs: ['--mute-audio'],
     args: [
       ...(platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
+      ...(newHeadless ? ['--headless=new'] : []),
       '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
-      // Normal desktop window size. Default headless Chromium is 800x600, which
-      // makes nekto render its cramped/narrow layout and is itself a bot tell;
-      // viewport:null (set per context) follows this window. Override with
-      // NEKTO_WINDOW_SIZE=WxH.
+      // Normal desktop window size; viewport:null (set per context) follows it.
+      // Override with NEKTO_WINDOW_SIZE=WxH.
       `--window-size=${(env.NEKTO_WINDOW_SIZE || '1920,1080').replace(/x/i, ',')}`,
       `--use-file-for-fake-audio-capture=${silentMicrophonePath}`,
     ],
