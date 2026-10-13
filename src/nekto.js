@@ -277,6 +277,13 @@ export class NektoBrowser {
     await page.evaluate(reason => { window.__nektoRelay.authorization = reason; }, authorization.reason); check();
     const initial = await this.recordSessionState(page, token, 'before-start', check);
     if (initial.attention || initial.verification || initial.restricted) return this.finishSearch(page, token, check, 'before-start');
+    // Dismiss the cookie-consent banner. It overlays the green start button, so the
+    // start click otherwise fails ("start control could not be activated"). The
+    // accept button is localized — Kazakh "Қабылдау", Russian "Принять", English
+    // "Accept" — so match by text as well as known selectors, then hide any residue.
+    const cookieDismissed = await page.evaluate(dismissCookieBanner).catch(() => false);
+    if (cookieDismissed) console.log(JSON.stringify({ event: 'nekto_cookie_dismissed' }));
+    check();
     if (!this.manualSearch && !initial.searching && !initial.partnerConnected) {
       setStage('start-delay');
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -437,6 +444,42 @@ export class NektoBrowser {
   }
 }
 
+
+// Runs in the page. Dismisses nekto's cookie-consent banner, which overlays the
+// start button. Clicks the localized accept button (Kazakh "Қабылдау", Russian
+// "Принять", English "Accept") by selector or visible text, then force-hides any
+// remaining banner container so it can't intercept the start click. Returns true
+// if it clicked or hid something.
+export function dismissCookieBanner() {
+  const vis = (e) => !!e && e.offsetParent !== null;
+  let acted = false;
+  try {
+    const all = Array.from(document.querySelectorAll('button, .btn, a'));
+    const byText = all.find((b) => {
+      const t = (b.innerText || b.textContent || '').trim();
+      return /^(қабылдау|қабылда|принять|accept|accept|ok|ок)$/i.test(t) || /қабылда|принять|accept/i.test(t);
+    });
+    const btn =
+      document.querySelector('.cookies-consent__button') ||
+      document.querySelector('#acceptCookies') ||
+      document.querySelector('[class*="cookie"] button') ||
+      byText ||
+      null;
+    if (vis(btn)) { btn.click(); acted = true; }
+  } catch (_) {}
+  // Hide any residual banner/overlay so it can't cover the start control.
+  try {
+    const sel = '.cookies-consent, [class*="cookie"], [class*="Cookie"], [class*="consent"], [class*="Consent"]';
+    for (const el of Array.from(document.querySelectorAll(sel))) {
+      const txt = (el.innerText || '').toLowerCase();
+      if (/cookie|cookи|қабылда|принять|политик|саясат/i.test(txt) && el.offsetHeight < 400) {
+        el.style.setProperty('display', 'none', 'important');
+        acted = true;
+      }
+    }
+  } catch (_) {}
+  return acted;
+}
 
 export function canForwardAudio(observed, captureError) {
   const state = observed.callState;
