@@ -221,7 +221,17 @@ export class NektoBrowser {
         if (this.forwarding && generation === this.generation && frame === page.mainFrame() &&
             new URL(frame.url()).origin === new URL(NEKTO_URL).origin) this.onAudio(base64);
       });
-      await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
+      // Diagnostic: NEKTO_NO_RELAY=1 skips the WebRTC relay (which patches
+      // RTCPeerConnection.prototype to tap the stranger's track). nekto has an
+      // rtc.track_integrity / rtcTrackReplacementDetected monitor, so this tests
+      // whether that prototype tampering is what triggers the restriction.
+      if (process.env.NEKTO_NO_RELAY !== '1') {
+        await page.addInitScript(installBrowserRelay, { origin: new URL(NEKTO_URL).origin });
+      } else {
+        // Minimal stub so status/monitor reads don't blow up without the relay.
+        await page.addInitScript(() => { window.__nektoRelay = { tracks: 0, frames: 0, peers: 0, error: null, peerStates: [], iceStates: [], inboundPackets: 0, inboundBytes: 0, trackEvents: 0, audioState: 'n/a' }; });
+        console.log(JSON.stringify({ event: 'nekto_relay_disabled' }));
+      }
       // Guard every navigation/frame: only the Nekto origin receives the token.
       await page.addInitScript({ content: tokenExtensionScript(token) });
       // Headless-only: Chrome reports window.screen = 800x600 in headless regardless
