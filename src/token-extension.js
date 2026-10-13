@@ -55,13 +55,23 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
   // inject the legacy flag. NEKTO_HEADLESS=legacy forces old headless for comparison.
   const wantHeadless = env.NEKTO_HEADLESS === '1';
   const legacyHeadless = env.NEKTO_HEADLESS === 'legacy';
+  // Pick the hardware ANGLE backend for the OS so headless WebGL uses the REAL GPU
+  // (headful shows e.g. "ANGLE (Intel ... Direct3D11)") instead of software SwiftShader.
+  // A Windows platform reporting SwiftShader is nekto's VM/headless tell.
+  const angle = platform === 'win32' ? 'd3d11' : platform === 'darwin' ? 'metal' : 'gl';
   return {
     channel: env.NEKTO_BROWSER_CHANNEL || (server ? 'chromium' : 'chrome'),
     headless: legacyHeadless,
-    ignoreDefaultArgs: ['--mute-audio'],
+    // In headless, strip Chrome's own GPU-disabling defaults so the real GPU engages.
+    ignoreDefaultArgs: wantHeadless
+      ? ['--mute-audio', '--disable-gpu', '--disable-gpu-compositing', '--disable-software-rasterizer']
+      : ['--mute-audio'],
     args: [
       ...(platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
-      ...(wantHeadless ? ['--headless=new'] : []),
+      ...(wantHeadless ? [
+        '--headless=new', '--enable-gpu', '--ignore-gpu-blocklist',
+        '--enable-webgl', '--enable-webgl2-compute-context', `--use-angle=${angle}`,
+      ] : []),
       '--autoplay-policy=no-user-gesture-required',
       '--disable-blink-features=AutomationControlled',
       '--allow-running-insecure-content', '--disable-web-security',
