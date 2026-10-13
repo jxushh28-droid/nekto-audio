@@ -43,27 +43,29 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
   const server = !!env.RAILWAY_PROJECT_ID ||
     (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY);
   // Headless by default everywhere (no visible window). Show the browser only for
-  // Headless mode selection. CONFIRMED: nekto restricts starting a call under
-  // Playwright's legacy headless (headless: true) — its UA contains
-  // "HeadlessChrome" and it uses a different render path, both detectable. A
-  // visible (headful) window works. To run windowless AND still work, use Chrome's
-  // "new" headless (--headless=new), which shares the real browser's code path
-  // (normal UA, real rendering) so it passes nekto's check.
-  //   default                 → headful (visible window)
-  //   NEKTO_HEADLESS=1         → new headless (no window, behaves like headful)
-  //   NEKTO_HEADLESS=legacy    → old headless (for debugging only; nekto blocks it)
+  // Headless mode selection. CONFIRMED: nekto restricts starting a call under BOTH
+  // Playwright's legacy headless AND Chrome's new headless (--headless=new) — it
+  // detects the headless render/GPU path. Only a REAL headful browser passes.
+  // So to run "invisibly" we keep the browser fully headful but move its window
+  // OFF-SCREEN (--window-position=-32000,-32000). It behaves identically to the
+  // visible headful mode that works, just with no window on screen.
+  //   default            → headful, visible window
+  //   NEKTO_HEADLESS=1    → headful, window moved off-screen (invisible, still works)
+  //   NEKTO_HEADLESS=new  → Chrome new headless (detected; debug only)
+  //   NEKTO_HEADLESS=legacy → old headless (detected; debug only)
   const mode = env.NEKTO_HEADLESS;
-  const newHeadless = mode === '1' || mode === 'new';
+  const hiddenHeadful = mode === '1';
+  const newHeadless = mode === 'new';
   const legacyHeadless = mode === 'legacy';
   return {
     channel: env.NEKTO_BROWSER_CHANNEL || (server ? 'chromium' : 'chrome'),
-    // For new headless we keep Playwright's headless:false (so it doesn't inject
-    // legacy --headless) and switch Chrome to new headless via the arg below.
     headless: legacyHeadless,
     ignoreDefaultArgs: ['--mute-audio'],
     args: [
       ...(platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
       ...(newHeadless ? ['--headless=new'] : []),
+      // Off-screen window = invisible but fully headful (passes nekto's check).
+      ...(hiddenHeadful ? ['--window-position=-32000,-32000'] : []),
       '--autoplay-policy=no-user-gesture-required',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
