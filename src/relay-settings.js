@@ -6,24 +6,33 @@ export class RelaySettings {
     this.directory = directory;
     this.path = join(directory, 'relay-settings.json');
     this.autoNext = true;
+    this.proxy = '';
   }
   async load() {
     try {
       const stored = JSON.parse(await readFile(this.path, 'utf8'));
       if (typeof stored.autoNext !== 'boolean') throw new Error('Invalid setting.');
       this.autoNext = stored.autoNext;
+      if (typeof stored.proxy === 'string') this.proxy = stored.proxy;
     } catch (error) {
       if (error.code !== 'ENOENT') throw new Error('Could not read the saved relay settings.');
     }
     return this.autoNext;
   }
-  async setAutoNext(enabled) {
-    if (typeof enabled !== 'boolean') throw new TypeError('Auto-next must be enabled or disabled.');
+  async #persist() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const temporary = `${this.path}.tmp`;
-    await writeFile(temporary, JSON.stringify({ autoNext: enabled }), { mode: 0o600 });
+    await writeFile(temporary, JSON.stringify({ autoNext: this.autoNext, proxy: this.proxy }), { mode: 0o600 });
     await rename(temporary, this.path);
+  }
+  async setAutoNext(enabled) {
+    if (typeof enabled !== 'boolean') throw new TypeError('Auto-next must be enabled or disabled.');
     this.autoNext = enabled;
+    await this.#persist();
+  }
+  async setProxy(raw) {
+    this.proxy = String(raw || '');
+    await this.#persist();
   }
 }
 

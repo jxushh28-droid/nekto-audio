@@ -8,6 +8,9 @@ export const commands = [
   new SlashCommandBuilder().setName('next').setDescription('End this Nekto call and search for another person'),
   new SlashCommandBuilder().setName('autonext').setDescription('Toggle searching after a partner ends the call')
     .addBooleanOption(option => option.setName('enabled').setDescription('Enable or disable automatic next')),
+  new SlashCommandBuilder().setName('proxy').setDescription('Route the browser through a proxy (e.g. socks5://ip:port) or clear it')
+    .addStringOption(option => option.setName('url').setDescription('socks5://ip:port, http://user:pass@ip:port, or "off" to clear')
+      .setRequired(false).setMaxLength(400)),
   new SlashCommandBuilder().setName('stop').setDescription('Stop Nekto while staying in Discord voice'),
   new SlashCommandBuilder().setName('leave').setDescription('Stop Nekto and leave Discord voice'),
   new SlashCommandBuilder().setName('status').setDescription('Show private relay connection status'),

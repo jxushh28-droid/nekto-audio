@@ -36,6 +36,18 @@ export class NektoBrowser {
     this.controlDiagnostics = null;
     // Each session has its own non-persistent browser context.
     this.microphonePath = resolve(directory, 'silent-microphone.wav');
+    // Outbound proxy (Playwright proxy config) + the public IP the browser is using.
+    this.proxy = parseProxy(process.env.NEKTO_PROXY || '');
+    this.browserIp = null;
+  }
+
+  // Set/clear the outbound proxy. Takes a raw string ("socks5://ip:port",
+  // "http://user:pass@ip:port", "ip:port", or "" / "off" to clear). Returns a
+  // short human description. A live session must be restarted for it to apply.
+  setProxy(raw) {
+    this.proxy = parseProxy(raw);
+    this.browserIp = null;
+    return this.proxy ? this.proxy.server : null;
   }
 
   stopSessionMonitor() {
@@ -168,7 +180,8 @@ export class NektoBrowser {
       // extra headers would also alter Google/CAPTCHA and other-site requests.
       const browser = await this.launch(token);
       check();
-      context = await browser.newContext({ viewport: null });
+      context = await browser.newContext({ viewport: null, ...(this.proxy ? { proxy: this.proxy } : {}) });
+      if (this.proxy) console.log(JSON.stringify({ event: 'nekto_proxy_active', server: this.proxy.server }));
       await context.grantPermissions(['microphone'], { origin: new URL(NEKTO_URL).origin });
       check();
       this.context = context;
@@ -245,6 +258,16 @@ export class NektoBrowser {
     const response = await page.goto(NEKTO_URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
     check();
     if (response && response.status() >= 400) throw searchError('load');
+    // Record the public IP the browser is actually using (through the proxy, if set).
+    // Non-fatal: a failed lookup just leaves browserIp null.
+    page.evaluate(async () => {
+      try {
+        const r = await fetch('https://api.ipify.org?format=json', { cache: 'no-store' });
+        return (await r.json()).ip || null;
+      } catch (_) { return null; }
+    }).then(ip => {
+      if (ip) { this.browserIp = ip; console.log(JSON.stringify({ event: 'nekto_browser_ip', ip, proxy: this.proxy?.server || null })); }
+    }).catch(() => {});
     const injection = await page.evaluate(key => {
       let lsAuthToken = false, storeAuthToken = null;
       try {
@@ -402,7 +425,7 @@ export class NektoBrowser {
   }
   async status(token) {
     const page = this.page;
-    if (!page || page.isClosed()) return { active: false, autoNext: this.autoNext, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    if (!page || page.isClosed()) return { active: false, autoNext: this.autoNext, browserIp: this.browserIp, proxy: this.proxy?.server || null, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
     this.callState = await page.evaluate(readAudioCallState);
     if (token) {
       const identity = await page.evaluate(confirmAudioToken, { token, timeout: 1 });
@@ -416,6 +439,7 @@ export class NektoBrowser {
       inboundPackets: status.inboundPackets || 0, inboundBytes: status.inboundBytes || 0,
       audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
     return { ...status, autoNext: this.autoNext, manualSearch: this.manualSearch, waitingForManualSearch: this.waitingForManualSearch,
+      browserIp: this.browserIp, proxy: this.proxy?.server || null,
       protocolDiagnostics: this.protocolDiagnostics, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async screenshot() {
@@ -444,6 +468,34 @@ export class NektoBrowser {
   }
 }
 
+
+// Parse a user-supplied proxy string into a Playwright proxy config, or null.
+// Accepts: "socks5://ip:port", "http://ip:port", "https://ip:port", "ip:port"
+// (defaults to http), each optionally with "user:pass@" credentials. "", "off",
+// "none", "clear", "direct" clear the proxy.
+export function parseProxy(raw) {
+  const s = String(raw || '').trim();
+  if (!s || /^(off|none|clear|direct|no)$/i.test(s)) return null;
+  let scheme = 'http', rest = s;
+  const m = s.match(/^([a-z0-9]+):\/\/(.*)$/i);
+  if (m) { scheme = m[1].toLowerCase(); rest = m[2]; }
+  if (scheme === 'socks') scheme = 'socks5';
+  if (!['http', 'https', 'socks5', 'socks4'].includes(scheme)) return null;
+  let username, password;
+  const at = rest.lastIndexOf('@');
+  if (at !== -1) {
+    const creds = rest.slice(0, at); rest = rest.slice(at + 1);
+    const ci = creds.indexOf(':');
+    if (ci !== -1) { username = creds.slice(0, ci); password = creds.slice(ci + 1); }
+    else username = creds;
+  }
+  if (!/^[^\s:]+:\d{1,5}$/.test(rest)) return null; // require host:port
+  const config = { server: `${scheme}://${rest}` };
+  // SOCKS proxies in Chromium do not support username/password auth; only attach
+  // credentials for http(s) proxies.
+  if (username && (scheme === 'http' || scheme === 'https')) { config.username = username; config.password = password || ''; }
+  return config;
+}
 
 // Runs in the page. Dismisses nekto's cookie-consent banner, which overlays the
 // start button. Clicks the localized accept button (Kazakh "Қабылдау", Russian

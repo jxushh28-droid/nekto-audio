@@ -132,6 +132,22 @@ client.on(Events.InteractionCreate, async interaction => {
         console.log(JSON.stringify({ event: 'nekto_next_requested', source: 'discord-command' }));
         queue.clear(); message = await browser.next(store.value); break;
       }
+      case 'proxy': {
+        const raw = interaction.options.getString('url') || '';
+        const server = browser.setProxy(raw);
+        await settings.setProxy(raw);
+        // Restart the browser so the new proxy takes effect (it is a launch/context-
+        // level setting), then re-search if we were in a voice channel.
+        await browser.stop(); queue.clear();
+        if (server) {
+          message = `Proxy set to ${server}. ` + (session?.guildId === interaction.guildId
+            ? `Reconnecting… ${await browser.search(store.value)}` : 'Use /join to start through it.');
+        } else {
+          message = 'Proxy cleared — using your direct connection. ' + (session?.guildId === interaction.guildId
+            ? `Reconnecting… ${await browser.search(store.value)}` : 'Use /join to start.');
+        }
+        break;
+      }
       case 'stop': await browser.stop(); queue.clear(); message = 'Nekto stopped.'; break;
       case 'leave': await leave(); message = 'Stopped Nekto and left voice.'; break;
       case 'status': {
@@ -233,6 +249,7 @@ function render(d){
       row('Discord voice',voice,voiceCls),
       row('Nekto',nekto,nektoCls),
       row('Automatic next',d.autoNext?badge('ON','ok'):badge('OFF','dim')),
+      row('Browser IP',(d.browserIp||'unknown')+(d.proxy?' (proxy)':' (direct)'),d.browserIp?'ok':'dim'),
       row('Authorization',auth,auth.includes('confirm')?'ok':'warn'),
       row('Captcha',captcha?badge('REQUIRED','bad'):badge('clear','ok')),
       row('Restricted',restricted?badge('YES','bad'):badge('no','ok')),
@@ -287,6 +304,8 @@ const server = http.createServer(async (request, response) => {
         voice: session?.connection.state.status || 'disconnected',
         nekto: status.active ? (status.callState?.phase || 'open') : 'stopped',
         autoNext: status.autoNext,
+        browserIp: status.browserIp || null,
+        proxy: status.proxy || null,
         authorization: status.authorization || 'unconfirmed',
         captcha: !!(d.captcha || d.hcaptcha),
         restricted: !!d.restricted,
@@ -345,6 +364,7 @@ try {
   await store.load();
   startupStage = 'relay-settings';
   browser.setAutoNext(await settings.load());
+  if (settings.proxy) browser.setProxy(settings.proxy);
   startupStage = 'browser';
   await browser.launch(store.value); // Verify Chromium with the extension before reporting healthy.
   client.once(Events.ClientReady, async () => {
