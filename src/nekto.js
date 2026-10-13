@@ -524,6 +524,21 @@ export class NektoBrowser {
     if (!page || page.isClosed()) return null;
     return page.screenshot({ type: 'jpeg', quality: 80, fullPage: false });
   }
+  // Forward an input event from the live panel into the page (click to solve a
+  // captcha, scroll, type). Coordinates are viewport (CSS) pixels.
+  async input(ev) {
+    const page = this.page;
+    if (!page || page.isClosed()) return false;
+    try {
+      if (ev.type === 'click') { await page.mouse.click(ev.x, ev.y); return true; }
+      if (ev.type === 'dblclick') { await page.mouse.dblclick(ev.x, ev.y); return true; }
+      if (ev.type === 'move') { await page.mouse.move(ev.x, ev.y); return true; }
+      if (ev.type === 'scroll') { await page.mouse.wheel(0, ev.dy || 0); return true; }
+      if (ev.type === 'text') { await page.keyboard.insertText(ev.text || ''); return true; }
+      if (ev.type === 'key') { await page.keyboard.press(ev.key || 'Enter'); return true; }
+    } catch (_) {}
+    return false;
+  }
   async stop() {
     this.stopSessionMonitor();
     this.generation++;

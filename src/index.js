@@ -199,8 +199,8 @@ h1{font-size:18px;font-weight:600;color:#fff;margin-bottom:16px;letter-spacing:.
 <div id="err"></div>
 <div class="grid" id="grid"></div>
 <div style="margin-top:16px">
-  <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#555;margin-bottom:8px">Browser view</div>
-  <img id="shot" src="/screenshot" style="width:100%;max-width:900px;border-radius:6px;border:1px solid #222;display:block" alt="browser view">
+  <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:#555;margin-bottom:8px">Browser view <span id="livestate" style="color:#4ade80;font-weight:400">● live — click to interact, type to send keys</span></div>
+  <img id="shot" src="/screenshot" tabindex="0" style="width:100%;max-width:1100px;border-radius:6px;border:1px solid #222;display:block;cursor:crosshair;outline:none" alt="browser view">
 </div>
 <script>
 const dot=c=>'<span class="dot"></span>';
@@ -282,8 +282,35 @@ function render(d){
   ];
   document.getElementById('grid').innerHTML=cards.join('');
 }
-function refreshShot(){const img=document.getElementById('shot');img.src='/screenshot?t='+Date.now();}
-poll();setInterval(poll,1500);setInterval(refreshShot,2000);
+const shot=document.getElementById('shot');
+let shotBusy=false;
+function refreshShot(){
+  if(shotBusy)return;shotBusy=true;
+  const img=new Image();
+  img.onload=()=>{shot.src=img.src;shotBusy=false;};
+  img.onerror=()=>{shotBusy=false;};
+  img.src='/screenshot?t='+Date.now();
+}
+// Map a click on the displayed image to page (viewport) coordinates.
+function pageCoords(e){
+  const r=shot.getBoundingClientRect();
+  const nw=shot.naturalWidth||r.width, nh=shot.naturalHeight||r.height;
+  const x=Math.round((e.clientX-r.left)/r.width*nw);
+  const y=Math.round((e.clientY-r.top)/r.height*nh);
+  return {x,y};
+}
+function sendInput(params){
+  const q=new URLSearchParams(params);
+  fetch('/input?'+q.toString()).then(()=>setTimeout(refreshShot,120)).catch(()=>{});
+}
+shot.addEventListener('click',e=>{const{x,y}=pageCoords(e);sendInput({type:'click',x,y});shot.focus();});
+shot.addEventListener('wheel',e=>{e.preventDefault();sendInput({type:'scroll',dy:Math.round(e.deltaY)});},{passive:false});
+shot.addEventListener('keydown',e=>{
+  const named=['Enter','Backspace','Tab','Escape','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Delete','Home','End'];
+  if(named.includes(e.key)){e.preventDefault();sendInput({type:'key',key:e.key});}
+  else if(e.key.length===1&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();sendInput({type:'text',text:e.key});}
+});
+poll();setInterval(poll,1500);setInterval(refreshShot,700);
 </script></body></html>`;
 
 const server = http.createServer(async (request, response) => {
@@ -336,6 +363,21 @@ const server = http.createServer(async (request, response) => {
       response.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' });
       response.end(img);
     } catch { response.writeHead(503); response.end('screenshot failed'); }
+    return;
+  }
+  if (request.url.startsWith('/input')) {
+    try {
+      const q = new URL(request.url, 'http://x').searchParams;
+      const ev = { type: q.get('type') };
+      if (q.get('x') != null) ev.x = Number(q.get('x'));
+      if (q.get('y') != null) ev.y = Number(q.get('y'));
+      if (q.get('dy') != null) ev.dy = Number(q.get('dy'));
+      if (q.get('text') != null) ev.text = q.get('text');
+      if (q.get('key') != null) ev.key = q.get('key');
+      const ok = await browser.input(ev);
+      response.writeHead(ok ? 200 : 503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      response.end(JSON.stringify({ ok }));
+    } catch { response.writeHead(400); response.end('bad input'); }
     return;
   }
   if (request.url === '/' || request.url === '/panel') {
