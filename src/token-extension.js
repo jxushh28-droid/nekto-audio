@@ -44,7 +44,9 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
     (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY);
   // Headless by default everywhere (no visible window). Show the browser only for
   // debugging via NEKTO_HEADFUL=1 (or the legacy NEKTO_HEADLESS=0).
-  const headless = !(env.NEKTO_HEADFUL === '1' || env.NEKTO_HEADLESS === '0');
+  // Temporarily defaulting to HEADFUL (visible window) to debug the start
+  // restriction. Set NEKTO_HEADLESS=1 to force headless.
+  const headless = env.NEKTO_HEADLESS === '1';
   return {
     channel: env.NEKTO_BROWSER_CHANNEL || (server ? 'chromium' : 'chrome'),
     headless, ignoreDefaultArgs: ['--mute-audio'],
@@ -57,7 +59,7 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
       // makes nekto render its cramped/narrow layout and is itself a bot tell;
       // viewport:null (set per context) follows this window. Override with
       // NEKTO_WINDOW_SIZE=WxH.
-      `--window-size=${(env.NEKTO_WINDOW_SIZE || '1366,768').replace(/x/i, ',')}`,
+      `--window-size=${(env.NEKTO_WINDOW_SIZE || '1920,1080').replace(/x/i, ',')}`,
       `--use-file-for-fake-audio-capture=${silentMicrophonePath}`,
     ],
   };
