@@ -42,41 +42,30 @@ export function browserLaunchOptions(silentMicrophonePath, { env = process.env, 
   if (typeof silentMicrophonePath !== 'string' || !silentMicrophonePath) throw new Error('A silent microphone file is required.');
   const server = !!env.RAILWAY_PROJECT_ID ||
     (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY);
-  // The hard truth: nekto detects BOTH the headless render path AND any JS tampering
-  // used to hide it (it native-checks canvas/WebGL/etc. and compares against a clean
-  // iframe). So no headless mode and no JS fingerprint spoof survives — only a REAL,
-  // untampered headful browser passes. To run with nothing visible on screen, we run
-  // that real headful browser but park its window far OFF-SCREEN. It is byte-for-byte
-  // the headful browser that works; the window simply never appears on any monitor.
-  //   default               → headful, visible window
-  //   NEKTO_HEADLESS=1       → headful, window off-screen (nothing visible, works)
-  //   NEKTO_HEADLESS=gpu     → new headless + real GPU (no window, but nekto detects it)
-  //   NEKTO_HEADLESS=legacy  → old headless (debug; detected)
-  const mode = env.NEKTO_HEADLESS;
-  const offscreen = mode === '1';
-  const gpuHeadless = mode === 'gpu' || mode === 'new';
-  const legacyHeadless = mode === 'legacy';
+  // Headless works fine against nekto — the author's production bot (edinica01/
+  // cipher-chat) runs plain headless:true with real Google Chrome on a Linux server,
+  // no Xvfb / no GPU tricks. The ONLY requirement is a PRE-WARMED token: warm a fresh
+  // token on a real browser first (do a few chats / pass the captcha), then headless
+  // uses it with no captcha. A cold token in headless searches forever and gets
+  // flagged — that is the real headful-vs-headless difference, not the fingerprint.
+  // So: NEKTO_HEADLESS=1 = plain headless with real Chrome + the reference's flags.
+  const headless = env.NEKTO_HEADLESS === '1';
   return {
     channel: env.NEKTO_BROWSER_CHANNEL || (server ? 'chromium' : 'chrome'),
-    headless: legacyHeadless,
-    ignoreDefaultArgs: gpuHeadless
-      ? ['--mute-audio', '--disable-gpu', '--disable-gpu-compositing', '--disable-software-rasterizer']
-      : ['--mute-audio'],
+    headless,
+    ignoreDefaultArgs: ['--mute-audio'],
     args: [
       ...(platform === 'linux' ? ['--no-sandbox', '--disable-dev-shm-usage'] : []),
-      ...(gpuHeadless ? [
-        '--headless=new', '--enable-gpu', '--ignore-gpu-blocklist',
-        ...(platform === 'win32' ? ['--use-angle=d3d11']
-          : platform === 'darwin' ? ['--use-angle=metal'] : ['--use-angle=gl']),
-      ] : []),
-      // Off-screen headful: a real window parked far off every monitor (invisible),
-      // with the taskbar entry suppressed where possible.
-      ...(offscreen ? ['--window-position=-32000,-32000'] : []),
       '--autoplay-policy=no-user-gesture-required',
+      '--disable-blink-features=AutomationControlled',
+      '--allow-running-insecure-content', '--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process,Translate,MediaRouter,OptimizationHints,BackForwardCache',
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
+      '--disable-background-networking', '--disable-default-apps', '--disable-sync',
+      '--disable-component-update', '--disable-breakpad', '--disable-hang-monitor',
+      '--metrics-recording-only', '--no-first-run', '--no-default-browser-check',
       '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
       // Normal desktop window size; viewport:null (set per context) follows it.
-      // Override with NEKTO_WINDOW_SIZE=WxH.
       `--window-size=${(env.NEKTO_WINDOW_SIZE || '1920,1080').replace(/x/i, ',')}`,
       `--use-file-for-fake-audio-capture=${silentMicrophonePath}`,
     ],
