@@ -39,6 +39,7 @@ export class NektoBrowser {
     // Outbound proxy (Playwright proxy config) + the public IP the browser is using.
     this.proxy = parseProxy(process.env.NEKTO_PROXY || '');
     this.browserIp = null;
+    this.webglRenderer = null;
   }
 
   // Set/clear the outbound proxy. Takes a raw string ("socks5://ip:port",
@@ -268,6 +269,19 @@ export class NektoBrowser {
     }).then(ip => {
       if (ip) { this.browserIp = ip; console.log(JSON.stringify({ event: 'nekto_browser_ip', ip, proxy: this.proxy?.server || null })); }
     }).catch(() => {});
+    // Record the WebGL renderer so we can see if headless is falling back to
+    // SwiftShader (software) vs the real GPU — the signal nekto uses to spot a VM.
+    page.evaluate(() => {
+      try {
+        const c = document.createElement('canvas');
+        const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+        if (!gl) return 'no-webgl';
+        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+        return ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
+      } catch (_) { return null; }
+    }).then(r => {
+      if (r) { this.webglRenderer = r; console.log(JSON.stringify({ event: 'nekto_webgl_renderer', renderer: r })); }
+    }).catch(() => {});
     const injection = await page.evaluate(key => {
       let lsAuthToken = false, storeAuthToken = null;
       try {
@@ -418,7 +432,7 @@ export class NektoBrowser {
   }
   async status(token) {
     const page = this.page;
-    if (!page || page.isClosed()) return { active: false, autoNext: this.autoNext, browserIp: this.browserIp, proxy: this.proxy?.server || null, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
+    if (!page || page.isClosed()) return { active: false, autoNext: this.autoNext, browserIp: this.browserIp, webglRenderer: this.webglRenderer, proxy: this.proxy?.server || null, protocolDiagnostics: this.protocolDiagnostics, authorization: this.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
     this.callState = await page.evaluate(readAudioCallState);
     if (token) {
       const identity = await page.evaluate(confirmAudioToken, { token, timeout: 1 });
@@ -432,7 +446,7 @@ export class NektoBrowser {
       inboundPackets: status.inboundPackets || 0, inboundBytes: status.inboundBytes || 0,
       audioState: status.audioState || 'unknown', bindingErrors: status.bindingErrors || 0 }));
     return { ...status, autoNext: this.autoNext, manualSearch: this.manualSearch, waitingForManualSearch: this.waitingForManualSearch,
-      browserIp: this.browserIp, proxy: this.proxy?.server || null,
+      browserIp: this.browserIp, webglRenderer: this.webglRenderer, proxy: this.proxy?.server || null,
       protocolDiagnostics: this.protocolDiagnostics, forwarding: this.forwarding, authorization: this.authorization || status.authorization, observedStage: this.observedStage, controlDiagnostics: this.controlDiagnostics, lastFailure: this.lastFailure, authorizationDiagnostics: this.authorizationDiagnostics, callState: this.callState, promptInfo: this.promptInfo, microphone: this.microphone };
   }
   async screenshot() {
