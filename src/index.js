@@ -217,6 +217,7 @@ async function poll(){
     const r=await fetch('/status');
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
+    window.__lastStatus=d;
     document.getElementById('err').style.display='none';
     render(d);
     document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString();
@@ -294,7 +295,13 @@ function refreshShot(){
   if(shotBusy)return;shotBusy=true;
   const img=new Image();
   img.onload=()=>{shot.src=img.src;shot.style.display='block';shotmsg.style.display='none';shotBusy=false;};
-  img.onerror=()=>{shot.style.display='none';shotmsg.style.display='flex';shotmsg.textContent='No active browser session — use /join to start, then this view goes live.';shotBusy=false;};
+  img.onerror=()=>{
+    shot.style.display='none';shotmsg.style.display='flex';shotBusy=false;
+    const d=window.__lastStatus||{};
+    if(d.browserLaunchError){shotmsg.textContent='Browser failed to start on the server: '+d.browserLaunchError+'. Use /join to retry.';}
+    else if(d.nekto&&d.nekto!=='stopped'){shotmsg.textContent='Session active ('+d.nekto+') — waiting for a frame. If this stays empty, the bot in your VC may be a different instance than this panel.';}
+    else{shotmsg.textContent='No active browser session. In Discord: /join your voice channel (that opens the nekto page), then this view goes live. Already joined and still blank? You may be running the bot twice on the same token — only one instance has the page.';}
+  };
   img.src='/screenshot?t='+Date.now();
 }
 // Map a click on the displayed image to page (viewport) coordinates. The image is

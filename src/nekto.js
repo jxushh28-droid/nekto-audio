@@ -485,7 +485,9 @@ export class NektoBrowser {
     if (initial.attention || initial.verification || initial.restricted) return this.finishSearch(page, token, check, 'before-start');
     if (!this.manualSearch && !initial.searching && !initial.partnerConnected) {
       setStage('start-delay');
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Dwell on the page before the first Start click — a human doesn't click
+      // instantly on load. Tunable via NEKTO_START_DELAY_MS (default 5000).
+      await new Promise(resolve => setTimeout(resolve, Number(process.env.NEKTO_START_DELAY_MS) || 5000));
       check();
     }
     setStage('control');
@@ -624,7 +626,15 @@ export class NektoBrowser {
   async screenshot() {
     const page = this.page;
     if (!page || page.isClosed()) return null;
-    return page.screenshot({ type: 'jpeg', quality: 80, fullPage: false });
+    // Don't let a mid-navigation/animation moment fail the live view: cap the
+    // wait and retry once. animations:'disabled' avoids waiting on CSS anims.
+    try {
+      return await page.screenshot({ type: 'jpeg', quality: 80, fullPage: false, timeout: 8000, animations: 'disabled' });
+    } catch (_) {
+      if (!this.page || this.page.isClosed()) return null;
+      try { return await this.page.screenshot({ type: 'jpeg', quality: 70, fullPage: false, timeout: 8000, animations: 'disabled' }); }
+      catch (_) { return null; }
+    }
   }
   // Forward an input event from the live panel into the page (click to solve a
   // captcha, scroll, type). Coordinates are viewport (CSS) pixels.
