@@ -9,6 +9,7 @@ import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
 import { tokenExtensionScript, browserLaunchOptions } from './token-extension.js';
 import { windowsUserAgentOverride } from './windows-spoof.js';
+import { installWebglSpoof, DEFAULT_GL_RENDERER, DEFAULT_GL_VENDOR } from './webgl-spoof.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
 import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificationReport } from './network-diagnostics.js';
@@ -274,6 +275,17 @@ export class NektoBrowser {
       }
       // Guard every navigation/frame: only the Nekto origin receives the token.
       await page.addInitScript({ content: tokenExtensionScript(token) });
+      // Opt-in WebGL renderer spoof (NEKTO_SPOOF_GL=1): on a GPU-less server the
+      // renderer reads "SwiftShader" (software), which contradicts the Windows UA.
+      // Report a Windows D3D11 GPU instead, via a Proxy that keeps the native-code
+      // toString intact. Experimental: may be caught by a pristine-realm check.
+      if (process.env.NEKTO_SPOOF_GL === '1') {
+        await page.addInitScript(installWebglSpoof, {
+          renderer: process.env.NEKTO_GL_RENDERER || DEFAULT_GL_RENDERER,
+          vendor: process.env.NEKTO_GL_VENDOR || DEFAULT_GL_VENDOR,
+        });
+        console.log(JSON.stringify({ event: 'nekto_webgl_spoof', renderer: process.env.NEKTO_GL_RENDERER || DEFAULT_GL_RENDERER }));
+      }
       // Headless-only: Chrome reports window.screen = 800x600 in headless regardless
       // of --window-size, so the 1920x1080 window ends up LARGER than the screen —
       // physically impossible, and nekto's #1 headless tell (confirmed: headful
