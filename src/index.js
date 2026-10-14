@@ -344,12 +344,16 @@ poll();setInterval(poll,1500);setInterval(refreshShot,700);
 </script></body></html>`;
 
 const server = http.createServer(async (request, response) => {
-  if (request.url === '/health') {
+  // Match on the path only: requests carry a query string (e.g. /screenshot?t=
+  // cache-buster), so a strict request.url === '/screenshot' never matched and
+  // fell through to 404 — which blanked the live view.
+  const pathname = (request.url || '').split('?')[0];
+  if (pathname === '/health') {
     response.writeHead(ready && client.isReady() ? 200 : 503, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ ready: ready && client.isReady() }));
     return;
   }
-  if (request.url === '/status') {
+  if (pathname === '/status') {
     try {
       const status = await browser.status(store.value);
       const d = status.authorizationDiagnostics || {};
@@ -387,7 +391,7 @@ const server = http.createServer(async (request, response) => {
     }
     return;
   }
-  if (request.url === '/screenshot') {
+  if (pathname === '/screenshot') {
     try {
       const img = await browser.screenshot();
       if (!img) { response.writeHead(503); response.end('no page'); return; }
@@ -396,7 +400,7 @@ const server = http.createServer(async (request, response) => {
     } catch { response.writeHead(503); response.end('screenshot failed'); }
     return;
   }
-  if (request.url.startsWith('/input')) {
+  if (pathname === '/input') {
     try {
       const q = new URL(request.url, 'http://x').searchParams;
       const ev = { type: q.get('type') };
@@ -411,7 +415,7 @@ const server = http.createServer(async (request, response) => {
     } catch { response.writeHead(400); response.end('bad input'); }
     return;
   }
-  if (request.url === '/' || request.url === '/panel') {
+  if (pathname === '/' || pathname === '/panel') {
     response.writeHead(200, { 'Content-Type': 'text/html' });
     response.end(PANEL_HTML);
     return;
