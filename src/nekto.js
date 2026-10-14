@@ -8,6 +8,7 @@ import { readAudioPrompt } from './audio-prompt.js';
 import { advanceAudioCall } from './call-controls.js';
 import { observeAudioSession } from './session-observation.js';
 import { tokenExtensionScript, browserLaunchOptions } from './token-extension.js';
+import { windowsUserAgentOverride } from './windows-spoof.js';
 import { waitForStartControl, inspectStartControls } from './start-controls.js';
 
 import { attachNektoDiagnostics, installVerificationObserver, sanitizeVerificationReport } from './network-diagnostics.js';
@@ -205,6 +206,25 @@ export class NektoBrowser {
       const page = await context.newPage();
       check();
       this.page = page;
+      // Windows spoof (opt-in NEKTO_SPOOF_WIN=1): on a Linux server nekto reads
+      // navigator.platform / userAgentData / Sec-CH-UA and shadow-bans Linux.
+      // Override via CDP Emulation.setUserAgentOverride so Chrome itself reports a
+      // coherent Windows identity — UA string, navigator.platform=Win32,
+      // userAgentData and the Sec-CH-UA request headers all agree, with NO JS
+      // property patching (which nekto's native-code tamper check would catch).
+      // The real Chrome version is kept; only the OS tokens change. On a native
+      // Windows machine leave NEKTO_SPOOF_WIN unset so the genuine FP is used.
+      if (process.env.NEKTO_SPOOF_WIN === '1') {
+        try {
+          const realUA = await page.evaluate(() => navigator.userAgent);
+          const override = windowsUserAgentOverride(realUA, process.env.NEKTO_ACCEPT_LANGUAGE || 'en-US,en;q=0.9');
+          const cdp = await context.newCDPSession(page);
+          await cdp.send('Emulation.setUserAgentOverride', override);
+          console.log(JSON.stringify({ event: 'nekto_windows_spoof', platform: 'Win32', ua: override.userAgent }));
+        } catch (error) {
+          console.warn(JSON.stringify({ event: 'nekto_windows_spoof_failed', errorType: String(error?.message || error) }));
+        }
+      }
       await attachNektoDiagnostics(page, token, {
         protocol: process.env.NEKTO_PROTOCOL_DIAGNOSTICS === '1',
         current: () => generation === this.generation && this.page === page,

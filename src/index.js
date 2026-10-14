@@ -19,6 +19,7 @@ const settings = new RelaySettings(process.env.DATA_DIR || './data');
 let ready = false;
 let busy = false;
 let closing = false;
+let browserLaunchError = null;
 let session = null;
 let ownerIds = new Set();
 const queue = new PcmQueue();
@@ -353,6 +354,7 @@ const server = http.createServer(async (request, response) => {
         voice: session?.connection.state.status || 'disconnected',
         nekto: status.active ? (status.callState?.phase || 'open') : 'stopped',
         autoNext: status.autoNext,
+        browserLaunchError,
         browserIp: status.browserIp || null,
         proxy: status.proxy || null,
         authorization: status.authorization || 'unconfirmed',
@@ -430,7 +432,15 @@ try {
   browser.setAutoNext(await settings.load());
   if (settings.proxy) browser.setProxy(settings.proxy);
   startupStage = 'browser';
-  await browser.launch(store.value); // Verify Chromium with the extension before reporting healthy.
+  // Warm the browser process, but don't let a launch failure take down the HTTP
+  // panel: the server is already listening, and a dead localhost:3000 hides the
+  // real error. On failure, record it and keep serving — /join retries the launch.
+  try {
+    await browser.launch(store.value);
+  } catch (error) {
+    browserLaunchError = safeError(error);
+    console.error(JSON.stringify({ event: 'browser_launch_failed_nonfatal', stage: 'browser', errorType: browserLaunchError }));
+  }
   client.once(Events.ClientReady, async () => {
     try {
       await client.application.fetch();
