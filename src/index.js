@@ -411,11 +411,26 @@ const server = http.createServer(async (request, response) => {
   }
   response.writeHead(404); response.end();
 });
-// Omit the host so Node binds the unspecified IPv6 address (::) in dual-stack
-// mode, accepting both IPv6 and IPv4. Railway's HTTP edge connects to the
-// container over IPv6, so binding '0.0.0.0' (IPv4-only) makes it refuse the
-// connection (502). Dual-stack also still serves localhost:PORT locally.
-server.listen(Number(process.env.PORT || 3000));
+// Railway's HTTP edge reaches the container over IPv6, so bind the IPv6 wildcard
+// (::) — dual-stack, so it also accepts IPv4 and still serves localhost:PORT.
+// Binding '0.0.0.0' (IPv4 only) makes the edge refuse the connection (502).
+// If the host has no IPv6, fall back to 0.0.0.0 so local runs still work.
+const PANEL_PORT = Number(process.env.PORT || 3000) || 3000;
+let listenFellBack = false;
+server.on('error', error => {
+  if (!listenFellBack && (error?.code === 'EADDRNOTAVAIL' || error?.code === 'EAFNOSUPPORT' || error?.code === 'EINVAL')) {
+    listenFellBack = true;
+    console.warn(JSON.stringify({ event: 'http_listen_ipv6_unavailable', fallback: '0.0.0.0' }));
+    server.listen(PANEL_PORT, '0.0.0.0');
+    return;
+  }
+  console.error(JSON.stringify({ event: 'http_listen_error', errorType: String(error?.code || error?.message || error) }));
+});
+server.on('listening', () => {
+  const a = server.address();
+  console.log(JSON.stringify({ event: 'http_listening', address: a?.address, port: a?.port, family: a?.family }));
+});
+server.listen(PANEL_PORT, '::');
 
 async function shutdown() {
   if (closing) return;
