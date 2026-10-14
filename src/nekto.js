@@ -214,15 +214,26 @@ export class NektoBrowser {
       // property patching (which nekto's native-code tamper check would catch).
       // The real Chrome version is kept; only the OS tokens change. On a native
       // Windows machine leave NEKTO_SPOOF_WIN unset so the genuine FP is used.
-      if (process.env.NEKTO_SPOOF_WIN === '1') {
+      const spoofWin = process.env.NEKTO_SPOOF_WIN === '1';
+      const tz = process.env.NEKTO_TZ || '';
+      if (spoofWin || tz) {
         try {
-          const realUA = await page.evaluate(() => navigator.userAgent);
-          const override = windowsUserAgentOverride(realUA, process.env.NEKTO_ACCEPT_LANGUAGE || 'en-US,en;q=0.9');
           const cdp = await context.newCDPSession(page);
-          await cdp.send('Emulation.setUserAgentOverride', override);
-          console.log(JSON.stringify({ event: 'nekto_windows_spoof', platform: 'Win32', ua: override.userAgent }));
+          if (spoofWin) {
+            const realUA = await page.evaluate(() => navigator.userAgent);
+            const override = windowsUserAgentOverride(realUA, process.env.NEKTO_ACCEPT_LANGUAGE || 'en-US,en;q=0.9');
+            await cdp.send('Emulation.setUserAgentOverride', override);
+            console.log(JSON.stringify({ event: 'nekto_windows_spoof', platform: 'Win32', ua: override.userAgent }));
+          }
+          if (tz) {
+            // Match the browser clock to the (residential) proxy's region. A UTC
+            // clock behind a US/EU residential IP is a server tell. CDP overrides
+            // Date/Intl natively — no JS patching for nekto's tamper check to see.
+            await cdp.send('Emulation.setTimezoneOverride', { timezoneId: tz });
+            console.log(JSON.stringify({ event: 'nekto_timezone_override', timezoneId: tz }));
+          }
         } catch (error) {
-          console.warn(JSON.stringify({ event: 'nekto_windows_spoof_failed', errorType: String(error?.message || error) }));
+          console.warn(JSON.stringify({ event: 'nekto_spoof_failed', errorType: String(error?.message || error) }));
         }
       }
       await attachNektoDiagnostics(page, token, {

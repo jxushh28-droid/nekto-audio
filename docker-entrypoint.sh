@@ -9,4 +9,7 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   [ -e /tmp/.X99-lock ] && break
   sleep 0.3
 done
+# Start speech-dispatcher (best-effort) so Chrome exposes real speechSynthesis
+# voices — voices=0 behind a Windows UA is a server tell. Never fatal.
+(speech-dispatcher --spawn >/tmp/speechd.log 2>&1 || true) &
 exec node src/index.js

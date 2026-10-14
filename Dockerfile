@@ -6,7 +6,8 @@ COPY package*.json ./
 # inside a virtual framebuffer (no "HeadlessChrome" tells for nekto to read).
 RUN npm ci --omit=dev \
  && npx playwright install --with-deps chromium \
- && apt-get update && apt-get install -y --no-install-recommends xvfb \
+ && apt-get update && apt-get install -y --no-install-recommends \
+      xvfb speech-dispatcher espeak-ng libnss3 \
  && rm -rf /var/lib/apt/lists/*
 COPY src ./src
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
