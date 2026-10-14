@@ -411,7 +411,11 @@ const server = http.createServer(async (request, response) => {
   }
   response.writeHead(404); response.end();
 });
-server.listen(Number(process.env.PORT || 3000), '0.0.0.0');
+// Omit the host so Node binds the unspecified IPv6 address (::) in dual-stack
+// mode, accepting both IPv6 and IPv4. Railway's HTTP edge connects to the
+// container over IPv6, so binding '0.0.0.0' (IPv4-only) makes it refuse the
+// connection (502). Dual-stack also still serves localhost:PORT locally.
+server.listen(Number(process.env.PORT || 3000));
 
 async function shutdown() {
   if (closing) return;
